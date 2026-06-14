@@ -12,7 +12,6 @@ const els = {
   fileMeta: document.querySelector("#fileMeta"),
   segmentTable: document.querySelector("#segmentTable"),
   translateButton: document.querySelector("#translateButton"),
-  copyOriginalButton: document.querySelector("#copyOriginalButton"),
   downloadButton: document.querySelector("#downloadButton"),
   resetButton: document.querySelector("#resetButton"),
   installButton: document.querySelector("#installButton"),
@@ -33,11 +32,14 @@ const slidePathPattern = /^ppt\/slides\/slide(\d+)\.xml$/;
 const wordPathPattern = /^word\/(?:document|header\d+|footer\d+|footnotes|endnotes|comments)\.xml$/;
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
 const parser = new DOMParser();
 const serializer = new XMLSerializer();
 
+loadSettings();
+
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=6").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=7").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -63,9 +65,20 @@ els.fileInput.addEventListener("change", async (event) => {
 });
 
 els.translateButton.addEventListener("click", translateAll);
-els.copyOriginalButton.addEventListener("click", copyOriginalsToTargets);
 els.downloadButton.addEventListener("click", downloadPresentation);
 els.resetButton.addEventListener("click", resetApp);
+
+[
+  els.translationDirection,
+  els.pptLayoutMode,
+  els.apiBase,
+  els.apiProxy,
+  els.modelName,
+  els.apiKey,
+].forEach((element) => {
+  element?.addEventListener("change", saveSettings);
+  element?.addEventListener("input", saveSettings);
+});
 
 async function loadOfficeFile(file) {
   try {
@@ -298,15 +311,6 @@ async function translateText({ apiBase, apiProxy, apiKey, model, direction, text
   return normalizeTranslation(data.translation || "", text);
 }
 
-function copyOriginalsToTargets() {
-  state.segments.forEach((segment) => {
-    segment.translation = segment.original;
-  });
-  renderSegments();
-  updateStats();
-  showToast("已将原文复制到译文栏。");
-}
-
 async function downloadPresentation() {
   if (!state.zip || !state.file) return;
 
@@ -412,14 +416,12 @@ function updateStats() {
   els.segmentCount.textContent = String(state.segments.length);
   els.translatedCount.textContent = String(translated);
   els.translateButton.disabled = !state.segments.length;
-  els.copyOriginalButton.disabled = !state.segments.length;
   els.downloadButton.disabled = !state.segments.length;
   setProgress(state.segments.length ? translated / state.segments.length : 0);
 }
 
 function setBusy(isBusy, message = "") {
   els.translateButton.disabled = isBusy || !state.segments.length;
-  els.copyOriginalButton.disabled = isBusy || !state.segments.length;
   els.downloadButton.disabled = isBusy || !state.segments.length;
   els.fileInput.disabled = isBusy;
   if (message) setStatus(message);
@@ -585,6 +587,38 @@ function getWordPartLabel(path) {
   if (/endnotes\.xml$/.test(path)) return "尾注";
   if (/comments\.xml$/.test(path)) return "批注";
   return "文档";
+}
+
+function loadSettings() {
+  try {
+    const settings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+    setElementValue(els.translationDirection, settings.translationDirection);
+    setElementValue(els.pptLayoutMode, settings.pptLayoutMode);
+    setElementValue(els.apiBase, settings.apiBase);
+    setElementValue(els.apiProxy, settings.apiProxy);
+    setElementValue(els.modelName, settings.modelName);
+    setElementValue(els.apiKey, settings.apiKey);
+  } catch {
+    localStorage.removeItem(SETTINGS_KEY);
+  }
+}
+
+function saveSettings() {
+  const settings = {
+    translationDirection: els.translationDirection?.value || "",
+    pptLayoutMode: els.pptLayoutMode?.value || "",
+    apiBase: els.apiBase?.value || "",
+    apiProxy: els.apiProxy?.value || "",
+    modelName: els.modelName?.value || "",
+    apiKey: els.apiKey?.value || "",
+  };
+
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function setElementValue(element, value) {
+  if (!element || !value) return;
+  element.value = value;
 }
 
 function showToast(message, isError = false) {
