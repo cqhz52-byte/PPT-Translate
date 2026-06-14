@@ -19,6 +19,7 @@ const els = {
   installButton: document.querySelector("#installButton"),
   previewDialog: document.querySelector("#previewDialog"),
   previewCloseButton: document.querySelector("#previewCloseButton"),
+  previewDownloadButton: document.querySelector("#previewDownloadButton"),
   previewBody: document.querySelector("#previewBody"),
   previewMeta: document.querySelector("#previewMeta"),
   translationDirection: document.querySelector("#translationDirection"),
@@ -48,7 +49,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=14").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=15").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -78,6 +79,7 @@ els.previewButton.addEventListener("click", openPreview);
 els.downloadButton.addEventListener("click", downloadPresentation);
 els.resetButton.addEventListener("click", resetApp);
 els.previewCloseButton.addEventListener("click", closePreview);
+els.previewDownloadButton.addEventListener("click", downloadPresentation);
 els.previewDialog.addEventListener("click", (event) => {
   if (event.target === els.previewDialog) closePreview();
 });
@@ -399,6 +401,7 @@ function writePresentationSegments(doc, segments) {
 
     textNodes[0].textContent = segment.translation.trim();
     normalizePresentationRunStyle(textNodes[0], segment);
+    applyPresentationBounds(paragraph, segment);
     applyPresentationLayout(paragraph, segment);
     clearRemainingTextNodes(textNodes);
   });
@@ -440,6 +443,9 @@ function updateStats() {
   els.translateButton.disabled = !state.segments.length;
   els.previewButton.disabled = !state.segments.length;
   els.downloadButton.disabled = !state.segments.length;
+  if (els.previewDownloadButton) {
+    els.previewDownloadButton.disabled = !state.segments.length;
+  }
   setProgress(state.segments.length ? translated / state.segments.length : 0);
 }
 
@@ -447,6 +453,9 @@ function setBusy(isBusy, message = "") {
   els.translateButton.disabled = isBusy || !state.segments.length;
   els.previewButton.disabled = isBusy || !state.segments.length;
   els.downloadButton.disabled = isBusy || !state.segments.length;
+  if (els.previewDownloadButton) {
+    els.previewDownloadButton.disabled = isBusy || !state.segments.length;
+  }
   els.fileInput.disabled = isBusy;
   if (message) setStatus(message);
 }
@@ -520,10 +529,16 @@ function createSlidePreview(segments) {
   segments.forEach((segment) => {
     if (!segment.layout?.bounds) return;
 
+    const index = state.segments.indexOf(segment);
     const box = document.createElement("div");
     box.className = `slide-text-box${segment.translation.trim() ? "" : " pending"}`;
+    box.dataset.index = String(index);
+    box.tabIndex = 0;
 
-    const { x, y, cx, cy } = segment.layout.bounds;
+    const { x, y, cx, cy } = getSegmentBounds(segment);
+    if (y / state.slideSize.cy < 0.22) {
+      box.classList.add("tools-below");
+    }
     box.style.left = `${(x / state.slideSize.cx) * 100}%`;
     box.style.top = `${(y / state.slideSize.cy) * 100}%`;
     box.style.width = `${(cx / state.slideSize.cx) * 100}%`;
@@ -531,7 +546,21 @@ function createSlidePreview(segments) {
     box.style.fontSize = `${getPreviewFontCqw(segment)}cqw`;
     box.style.whiteSpace = shouldUseSingleLine(segment) ? "nowrap" : "normal";
 
-    box.textContent = segment.translation.trim() || segment.original;
+    const text = document.createElement("span");
+    text.className = "slide-box-text";
+    text.textContent = segment.translation.trim() || segment.original;
+
+    const tools = createPreviewBoxTools(segment, index);
+    const resizeHandle = document.createElement("button");
+    resizeHandle.type = "button";
+    resizeHandle.className = "slide-resize-handle";
+    resizeHandle.title = "拖动调整文本框大小";
+    resizeHandle.setAttribute("aria-label", "拖动调整文本框大小");
+    attachPreviewResize(resizeHandle, box, segment);
+
+    box.addEventListener("pointerdown", () => selectPreviewBox(box));
+    box.addEventListener("focus", () => selectPreviewBox(box));
+    box.append(text, tools, resizeHandle);
     slide.append(box);
   });
 
@@ -544,6 +573,110 @@ function createSlidePreview(segments) {
   }
 
   return slide;
+}
+
+function createPreviewBoxTools(segment, index) {
+  const tools = document.createElement("div");
+  tools.className = "slide-box-tools";
+
+  const scaleInput = document.createElement("input");
+  scaleInput.type = "range";
+  scaleInput.min = "60";
+  scaleInput.max = "115";
+  scaleInput.step = "5";
+  scaleInput.value = segment.overrides.fontScale || els.fontScale.value || "100";
+  scaleInput.title = "本段字号";
+
+  const scaleValue = document.createElement("output");
+  scaleValue.textContent = segment.overrides.fontScale ? `${segment.overrides.fontScale}%` : `${els.fontScale.value || "100"}%`;
+
+  scaleInput.addEventListener("input", () => {
+    const current = state.segments[index];
+    current.overrides.fontScale = scaleInput.value;
+    scaleValue.textContent = `${scaleInput.value}%`;
+    rerenderPreviewIfOpen();
+  });
+
+  const wrapButton = document.createElement("button");
+  wrapButton.type = "button";
+  wrapButton.textContent = shouldUseSingleLine(segment) ? "换行" : "单行";
+  wrapButton.title = shouldUseSingleLine(segment) ? "允许自动换行" : "强制本段单行";
+  wrapButton.addEventListener("click", () => {
+    const current = state.segments[index];
+    const nextSingleLine = !shouldUseSingleLine(current);
+    current.overrides.singleLine = nextSingleLine;
+    current.overrides.wrapMode = nextSingleLine ? "single" : "wrap";
+    rerenderPreviewIfOpen();
+  });
+
+  const resetButton = document.createElement("button");
+  resetButton.type = "button";
+  resetButton.textContent = "重置";
+  resetButton.title = "重置本段预览调整";
+  resetButton.addEventListener("click", () => {
+    state.segments[index].overrides = createSegmentOverrides();
+    renderSegments();
+    rerenderPreviewIfOpen();
+  });
+
+  const exportButton = document.createElement("button");
+  exportButton.type = "button";
+  exportButton.textContent = "导出";
+  exportButton.title = "导出翻译文件";
+  exportButton.addEventListener("click", downloadPresentation);
+
+  tools.append(scaleInput, scaleValue, wrapButton, resetButton, exportButton);
+  return tools;
+}
+
+function selectPreviewBox(box) {
+  box.closest(".slide-preview")
+    ?.querySelectorAll(".slide-text-box.selected")
+    .forEach((item) => {
+      if (item !== box) item.classList.remove("selected");
+    });
+  box.classList.add("selected");
+}
+
+function attachPreviewResize(handle, box, segment) {
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectPreviewBox(box);
+
+    const slide = box.closest(".slide-preview");
+    const slideRect = slide.getBoundingClientRect();
+    const boxRect = box.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startWidth = boxRect.width;
+    const startHeight = boxRect.height;
+    const minWidth = Math.max(36, slideRect.width * 0.035);
+    const minHeight = Math.max(20, slideRect.height * 0.035);
+    const maxWidth = slideRect.right - boxRect.left;
+    const maxHeight = slideRect.bottom - boxRect.top;
+
+    handle.setPointerCapture(event.pointerId);
+
+    const onMove = (moveEvent) => {
+      const width = Math.max(minWidth, Math.min(maxWidth, startWidth + moveEvent.clientX - startX));
+      const height = Math.max(minHeight, Math.min(maxHeight, startHeight + moveEvent.clientY - startY));
+      box.style.width = `${(width / slideRect.width) * 100}%`;
+      box.style.height = `${(height / slideRect.height) * 100}%`;
+      updateSegmentBoundsFromPreview(segment, box, slideRect);
+    };
+
+    const onEnd = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onEnd);
+      handle.removeEventListener("pointercancel", onEnd);
+      renderSegments();
+    };
+
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onEnd);
+    handle.addEventListener("pointercancel", onEnd);
+  });
 }
 
 function groupSegmentsForPreview() {
@@ -631,6 +764,17 @@ function normalizeWordRunStyle(textNode, segment) {
   if (sizeNode && currentSize > 0 && scale < 1) {
     sizeNode.setAttributeNS(WORD_NS, "w:val", String(Math.max(16, Math.round(currentSize * scale))));
   }
+}
+
+function applyPresentationBounds(paragraph, segment) {
+  const bounds = segment.overrides?.bounds;
+  if (!bounds) return;
+
+  const transform = getParagraphTransform(paragraph);
+  if (!transform?.extent) return;
+
+  transform.extent.setAttribute("cx", String(Math.max(1, Math.round(bounds.cx))));
+  transform.extent.setAttribute("cy", String(Math.max(1, Math.round(bounds.cy))));
 }
 
 function applyPresentationLayout(paragraph, segment) {
@@ -782,6 +926,8 @@ function inspectPresentationLayout(paragraph, original) {
 }
 
 function shouldUseSingleLine(segment) {
+  if (segment?.overrides?.wrapMode === "single") return true;
+  if (segment?.overrides?.wrapMode === "wrap") return false;
   if (segment?.overrides?.singleLine) return true;
   const mode = getPptLayoutMode();
   if (mode === "compact-fit") return false;
@@ -824,10 +970,12 @@ function createSegmentControls(segment, index) {
 
   const singleLineInput = document.createElement("input");
   singleLineInput.type = "checkbox";
-  singleLineInput.checked = Boolean(segment.overrides.singleLine);
+  singleLineInput.checked = segment.overrides.wrapMode === "single" || Boolean(segment.overrides.singleLine);
   singleLineInput.dataset.index = String(index);
   singleLineInput.addEventListener("change", () => {
-    state.segments[Number(singleLineInput.dataset.index)].overrides.singleLine = singleLineInput.checked;
+    const current = state.segments[Number(singleLineInput.dataset.index)];
+    current.overrides.singleLine = singleLineInput.checked;
+    current.overrides.wrapMode = singleLineInput.checked ? "single" : "";
     rerenderPreviewIfOpen();
   });
 
@@ -861,6 +1009,8 @@ function createSegmentControls(segment, index) {
       item.overrides = {
         fontScale: current.overrides.fontScale,
         singleLine: current.type === "pptx" ? current.overrides.singleLine : false,
+        wrapMode: current.type === "pptx" ? current.overrides.wrapMode : "",
+        bounds: null,
       };
     });
     renderSegments();
@@ -880,6 +1030,8 @@ function createSegmentOverrides() {
   return {
     fontScale: "",
     singleLine: false,
+    wrapMode: "",
+    bounds: null,
   };
 }
 
@@ -939,10 +1091,7 @@ function saveSettings() {
 }
 
 function getTextBounds(paragraph) {
-  const shape = paragraph.parentElement?.parentElement;
-  const transform = [...(shape?.getElementsByTagNameNS(DRAWING_NS, "xfrm") || [])][0];
-  const offset = [...(transform?.getElementsByTagNameNS(DRAWING_NS, "off") || [])][0];
-  const extent = [...(transform?.getElementsByTagNameNS(DRAWING_NS, "ext") || [])][0];
+  const { offset, extent } = getParagraphTransform(paragraph) || {};
 
   if (!offset || !extent) return null;
 
@@ -951,6 +1100,31 @@ function getTextBounds(paragraph) {
     y: Number(offset.getAttribute("y")) || 0,
     cx: Number(extent.getAttribute("cx")) || 0,
     cy: Number(extent.getAttribute("cy")) || 0,
+  };
+}
+
+function getParagraphTransform(paragraph) {
+  const shape = paragraph.parentElement?.parentElement;
+  const transform = [...(shape?.getElementsByTagNameNS(DRAWING_NS, "xfrm") || [])][0];
+  const offset = [...(transform?.getElementsByTagNameNS(DRAWING_NS, "off") || [])][0];
+  const extent = [...(transform?.getElementsByTagNameNS(DRAWING_NS, "ext") || [])][0];
+
+  return { transform, offset, extent };
+}
+
+function getSegmentBounds(segment) {
+  return segment.overrides?.bounds || segment.layout?.bounds;
+}
+
+function updateSegmentBoundsFromPreview(segment, box, slideRect) {
+  const baseBounds = segment.layout?.bounds;
+  if (!baseBounds) return;
+
+  segment.overrides.bounds = {
+    x: baseBounds.x,
+    y: baseBounds.y,
+    cx: Math.max(1, (box.offsetWidth / slideRect.width) * state.slideSize.cx),
+    cy: Math.max(1, (box.offsetHeight / slideRect.height) * state.slideSize.cy),
   };
 }
 

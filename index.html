@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon.svg">
-    <link rel="stylesheet" href="styles.css?v=14">
+    <link rel="stylesheet" href="styles.css?v=15">
   </head>
   <body>
     <main class="shell">
@@ -16,7 +16,7 @@
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v14 · 局部字号/单行控制</p>
+          <p class="version">v15 · 可调预览框</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -138,15 +138,18 @@
             <h2>译文预览</h2>
             <p id="previewMeta">按页面/部件预览最终写入文件的文字。</p>
           </div>
-          <button class="icon-button" id="previewCloseButton" type="button" title="关闭预览" aria-label="关闭预览">
-            <span aria-hidden="true">×</span>
-          </button>
+          <div class="preview-actions">
+            <button id="previewDownloadButton" class="primary" type="button">导出文件</button>
+            <button class="icon-button" id="previewCloseButton" type="button" title="关闭预览" aria-label="关闭预览">
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
         </header>
         <div class="preview-body" id="previewBody"></div>
       </div>
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=14" type="module"></script>
+    <script src="app.js?v=15" type="module"></script>
   </body>
 </html>
