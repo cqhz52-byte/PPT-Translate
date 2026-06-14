@@ -1,0 +1,8 @@
+node_modules/
+.env
+*.log
+*.ppt
+*.pptx
+*.doc
+*.docx
+.vercel/

@@ -1,0 +1,9 @@
+.git
+.vercel
+node_modules
+*.ppt
+*.pptx
+*.doc
+*.docx
+*.log
+server.js

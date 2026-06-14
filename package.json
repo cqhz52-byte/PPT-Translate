@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "start": "node server.js",
+    "start:local": "set HOST=127.0.0.1&& node server.js",
+    "build:standalone": "node build-standalone.js"
+  },
+  "dependencies": {}
+}
