@@ -38,14 +38,14 @@ const wordPathPattern = /^word\/(?:document|header\d+|footer\d+|footnotes|endnot
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 const parser = new DOMParser();
 const serializer = new XMLSerializer();
 
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=9").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=10").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -389,7 +389,7 @@ function writePresentationSegments(doc, segments) {
     if (!textNodes.length) return;
 
     textNodes[0].textContent = segment.translation.trim();
-    normalizePresentationRunStyle(textNodes[0], segment.original, segment.translation);
+    normalizePresentationRunStyle(textNodes[0], segment);
     applyPresentationLayout(paragraph, segment);
     clearRemainingTextNodes(textNodes);
   });
@@ -542,12 +542,12 @@ function normalizeTranslation(translation, source) {
   return clean.replace(/\s*[\r\n]+\s*/g, " ").replace(/[ \t]{2,}/g, " ");
 }
 
-function normalizePresentationRunStyle(textNode, source, translation) {
+function normalizePresentationRunStyle(textNode, segment) {
   const run = textNode.parentElement;
   if (!run) return;
 
   const runProperties = ensureChild(run, "rPr");
-  const scale = getPresentationLengthScale(source, translation);
+  const scale = getPresentationLengthScale(segment);
   const currentSize = Number(runProperties.getAttribute("sz") || 0);
 
   if (currentSize > 0 && scale < 1) {
@@ -598,6 +598,11 @@ function applyPresentationLayout(paragraph, segment) {
 
   if (shouldForceSingleLine) {
     bodyProperties.setAttribute("wrap", "none");
+    const autoFit = document.createElementNS(DRAWING_NS, "a:normAutofit");
+    autoFit.setAttribute("fontScale", "85000");
+    autoFit.setAttribute("lnSpcReduction", "12000");
+    bodyProperties.append(autoFit);
+    return;
   } else if (layout.wrap && layout.wrap !== "none") {
     bodyProperties.setAttribute("wrap", layout.wrap);
   } else {
@@ -666,9 +671,12 @@ function getLengthScale(source, translation) {
   return 0.88;
 }
 
-function getPresentationLengthScale(source, translation) {
-  if (getPptLayoutMode() !== "compact-fit") return 1;
-  return getLengthScale(source, translation);
+function getPresentationLengthScale(segment) {
+  if (getPptLayoutMode() === "compact-fit" || shouldUseSingleLine(segment)) {
+    return getLengthScale(segment.original, segment.translation);
+  }
+
+  return 1;
 }
 
 function getPptLayoutMode() {
@@ -702,15 +710,8 @@ function shouldUseSingleLine(segment) {
   const layout = segment.layout || {};
   if (layout.hasManualBreaks) return false;
   if (layout.textBodyParagraphCount > 1) return false;
-  if (layout.wrap && layout.wrap !== "none") return false;
-  if (layout.autofit === "normAutofit" || layout.autofit === "spAutoFit") return false;
 
-  const textLength = layout.textLength || [...segment.original].length;
-  const translationLength = [...(segment.translation || "")].length;
-  const looksLikeShortLabel = textLength <= 28 && translationLength <= 52;
-  const looksLikeLongSentence = /[。；;.!?？]/.test(segment.original) || textLength > 36 || translationLength > 72;
-
-  return looksLikeShortLabel && !looksLikeLongSentence;
+  return true;
 }
 
 function countTextBodyParagraphs(textBody) {

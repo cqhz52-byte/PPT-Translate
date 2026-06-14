@@ -545,7 +545,7 @@ td:first-child {
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v9 · 译文预览 · 智能保持 PPT 版式</p>
+          <p class="version">v10 · 按原始行数适配 · 译文预览</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -579,8 +579,8 @@ td:first-child {
             <label>
               PPT 版式策略
               <select id="pptLayoutMode">
-                <option value="smart" selected>智能保持原版式</option>
-                <option value="keep-size">短文本单行优先</option>
+                <option value="smart" selected>按原始行数适配</option>
+                <option value="keep-size">强制单行（谨慎）</option>
                 <option value="compact-fit">紧凑适配，轻微缩小</option>
               </select>
             </label>
@@ -733,7 +733,7 @@ const wordPathPattern = /^word\/(?:document|header\d+|footer\d+|footnotes|endnot
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 const parser = new DOMParser();
 const serializer = new XMLSerializer();
 
@@ -847,12 +847,12 @@ function normalizeTranslation(translation, source) {
   return clean.replace(/\s*[\r\n]+\s*/g, " ").replace(/[ \t]{2,}/g, " ");
 }
 
-function normalizePresentationRunStyle(textNode, source, translation) {
+function normalizePresentationRunStyle(textNode, segment) {
   const run = textNode.parentElement;
   if (!run) return;
 
   const runProperties = ensureChild(run, "rPr");
-  const scale = getPresentationLengthScale(source, translation);
+  const scale = getPresentationLengthScale(segment);
   const currentSize = Number(runProperties.getAttribute("sz") || 0);
 
   if (currentSize > 0 && scale < 1) {
@@ -903,6 +903,11 @@ function applyPresentationLayout(paragraph, segment) {
 
   if (shouldForceSingleLine) {
     bodyProperties.setAttribute("wrap", "none");
+    const autoFit = document.createElementNS(DRAWING_NS, "a:normAutofit");
+    autoFit.setAttribute("fontScale", "85000");
+    autoFit.setAttribute("lnSpcReduction", "12000");
+    bodyProperties.append(autoFit);
+    return;
   } else if (layout.wrap && layout.wrap !== "none") {
     bodyProperties.setAttribute("wrap", layout.wrap);
   } else {
@@ -971,9 +976,12 @@ function getLengthScale(source, translation) {
   return 0.88;
 }
 
-function getPresentationLengthScale(source, translation) {
-  if (getPptLayoutMode() !== "compact-fit") return 1;
-  return getLengthScale(source, translation);
+function getPresentationLengthScale(segment) {
+  if (getPptLayoutMode() === "compact-fit" || shouldUseSingleLine(segment)) {
+    return getLengthScale(segment.original, segment.translation);
+  }
+
+  return 1;
 }
 
 function getPptLayoutMode() {
@@ -1007,15 +1015,8 @@ function shouldUseSingleLine(segment) {
   const layout = segment.layout || {};
   if (layout.hasManualBreaks) return false;
   if (layout.textBodyParagraphCount > 1) return false;
-  if (layout.wrap && layout.wrap !== "none") return false;
-  if (layout.autofit === "normAutofit" || layout.autofit === "spAutoFit") return false;
 
-  const textLength = layout.textLength || [...segment.original].length;
-  const translationLength = [...(segment.translation || "")].length;
-  const looksLikeShortLabel = textLength <= 28 && translationLength <= 52;
-  const looksLikeLongSentence = /[。；;.!?？]/.test(segment.original) || textLength > 36 || translationLength > 72;
-
-  return looksLikeShortLabel && !looksLikeLongSentence;
+  return true;
 }
 
 function countTextBodyParagraphs(textBody) {
