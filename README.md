@@ -20,8 +20,8 @@ npm run build:standalone
 
 可以把本项目推到 GitHub，但要区分两种发布方式：
 
-- GitHub Pages：只能托管前端页面。页面可以上传、解析和导出 PPTX/DOCX，但自动翻译需要在“翻译代理地址”里填写一个外部接口地址，例如 `https://your-app.vercel.app/api/translate`。
-- Vercel 连接 GitHub 仓库：可以同时发布前端和 `api/translate.js` 后端代理。此时“翻译代理地址”保持默认 `./api/translate` 即可。
+- GitHub Pages：只能托管前端页面。当前简化界面默认调用同域 `./api/translate`，因此静态 GitHub Pages 不能直接自动翻译，除非自行改代码接入外部代理。
+- Vercel 连接 GitHub 仓库：可以同时发布前端和 `api/translate.js` 后端代理。当前默认配置可直接使用。
 
 如果只想做静态 GitHub Pages，请不要把 DeepSeek API Key 写进代码或仓库；在页面里临时输入即可。
 
@@ -36,12 +36,6 @@ npm run build:standalone
 5. Build Command 留空或保持默认空值。
 6. Output Directory 保持 `.`。
 7. 部署完成后打开 Vercel 分配的域名。
-
-页面里的“翻译代理地址”保持默认：
-
-```text
-./api/translate
-```
 
 DeepSeek API Key 不要写入代码仓库。默认模式是在页面里临时输入 Key，由浏览器发送给同域的 Vercel Function，再由 Function 转发给 DeepSeek。
 
@@ -77,7 +71,7 @@ http://192.168.1.23:5173
 4. 填入 DeepSeek API Key。
 5. 点击“自动翻译”，可先用“预览译文”按页面/部件检查内容，再导出文件。
 
-DeepSeek API 地址、代理地址、模型、API Key、翻译方向和 PPT 版式策略会保存在当前浏览器本地。电脑和手机需要各自输入一次。
+DeepSeek 模型、API Key、翻译方向和 PPT 版式策略会保存在当前浏览器本地。电脑和手机需要各自输入一次。
 
 ## 注意
 

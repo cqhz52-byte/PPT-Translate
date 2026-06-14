@@ -22,8 +22,6 @@ const els = {
   previewMeta: document.querySelector("#previewMeta"),
   translationDirection: document.querySelector("#translationDirection"),
   pptLayoutMode: document.querySelector("#pptLayoutMode"),
-  apiBase: document.querySelector("#apiBase"),
-  apiProxy: document.querySelector("#apiProxy"),
   modelName: document.querySelector("#modelName"),
   apiKey: document.querySelector("#apiKey"),
   slideCount: document.querySelector("#slideCount"),
@@ -39,13 +37,15 @@ const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
 const SETTINGS_VERSION = 3;
+const DEEPSEEK_API_BASE = "https://api.deepseek.com";
+const TRANSLATE_PROXY = "./api/translate";
 const parser = new DOMParser();
 const serializer = new XMLSerializer();
 
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=10").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=11").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -82,8 +82,6 @@ els.previewDialog.addEventListener("click", (event) => {
 [
   els.translationDirection,
   els.pptLayoutMode,
-  els.apiBase,
-  els.apiProxy,
   els.modelName,
   els.apiKey,
 ].forEach((element) => {
@@ -259,13 +257,13 @@ function renderSegments() {
 
 async function translateAll() {
   const apiKey = els.apiKey.value.trim();
-  const apiBase = els.apiBase.value.trim().replace(/\/$/, "");
-  const apiProxy = els.apiProxy.value.trim() || "./api/translate";
+  const apiBase = DEEPSEEK_API_BASE;
+  const apiProxy = TRANSLATE_PROXY;
   const model = els.modelName.value.trim();
   const direction = getDirectionConfig(els.translationDirection.value);
 
-  if (!apiKey || !apiBase || !model) {
-    showToast("请先填写接口地址、模型和 API Key。", true);
+  if (!apiKey || !model) {
+    showToast("请先填写模型和 API Key。", true);
     return;
   }
 
@@ -747,8 +745,6 @@ function loadSettings() {
     }
     setElementValue(els.translationDirection, settings.translationDirection);
     setElementValue(els.pptLayoutMode, settings.pptLayoutMode);
-    setElementValue(els.apiBase, settings.apiBase);
-    setElementValue(els.apiProxy, settings.apiProxy);
     setElementValue(els.modelName, settings.modelName);
     setElementValue(els.apiKey, settings.apiKey);
   } catch {
@@ -761,8 +757,6 @@ function saveSettings() {
     settingsVersion: SETTINGS_VERSION,
     translationDirection: els.translationDirection?.value || "",
     pptLayoutMode: els.pptLayoutMode?.value || "",
-    apiBase: els.apiBase?.value || "",
-    apiProxy: els.apiProxy?.value || "",
     modelName: els.modelName?.value || "",
     apiKey: els.apiKey?.value || "",
   };

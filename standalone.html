@@ -545,7 +545,7 @@ td:first-child {
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v10 · 按原始行数适配 · 译文预览</p>
+          <p class="version">v11 · 简洁设置 · 按原始行数适配</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -583,14 +583,6 @@ td:first-child {
                 <option value="keep-size">强制单行（谨慎）</option>
                 <option value="compact-fit">紧凑适配，轻微缩小</option>
               </select>
-            </label>
-            <label>
-              DeepSeek API 地址
-              <input id="apiBase" type="url" value="https://api.deepseek.com" spellcheck="false">
-            </label>
-            <label>
-              翻译代理地址
-              <input id="apiProxy" type="text" value="./api/translate" spellcheck="false">
             </label>
             <label>
               模型
@@ -717,8 +709,6 @@ const els = {
   previewMeta: document.querySelector("#previewMeta"),
   translationDirection: document.querySelector("#translationDirection"),
   pptLayoutMode: document.querySelector("#pptLayoutMode"),
-  apiBase: document.querySelector("#apiBase"),
-  apiProxy: document.querySelector("#apiProxy"),
   modelName: document.querySelector("#modelName"),
   apiKey: document.querySelector("#apiKey"),
   slideCount: document.querySelector("#slideCount"),
@@ -734,6 +724,8 @@ const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
 const SETTINGS_VERSION = 3;
+const DEEPSEEK_API_BASE = "https://api.deepseek.com";
+const TRANSLATE_PROXY = "./api/translate";
 const parser = new DOMParser();
 const serializer = new XMLSerializer();
 
@@ -1052,8 +1044,6 @@ function loadSettings() {
     }
     setElementValue(els.translationDirection, settings.translationDirection);
     setElementValue(els.pptLayoutMode, settings.pptLayoutMode);
-    setElementValue(els.apiBase, settings.apiBase);
-    setElementValue(els.apiProxy, settings.apiProxy);
     setElementValue(els.modelName, settings.modelName);
     setElementValue(els.apiKey, settings.apiKey);
   } catch {
@@ -1066,8 +1056,6 @@ function saveSettings() {
     settingsVersion: SETTINGS_VERSION,
     translationDirection: els.translationDirection?.value || "",
     pptLayoutMode: els.pptLayoutMode?.value || "",
-    apiBase: els.apiBase?.value || "",
-    apiProxy: els.apiProxy?.value || "",
     modelName: els.modelName?.value || "",
     apiKey: els.apiKey?.value || "",
   };
