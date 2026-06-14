@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon.svg">
-    <link rel="stylesheet" href="styles.css?v=11">
+    <link rel="stylesheet" href="styles.css?v=12">
   </head>
   <body>
     <main class="shell">
@@ -16,7 +16,7 @@
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v11 · 简洁设置 · 按原始行数适配</p>
+          <p class="version">v12 · 可调字号 · 保留自动换行</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -50,10 +50,17 @@
             <label>
               PPT 版式策略
               <select id="pptLayoutMode">
-                <option value="smart" selected>按原始行数适配</option>
+                <option value="smart" selected>保留原文本框换行</option>
                 <option value="keep-size">强制单行（谨慎）</option>
                 <option value="compact-fit">紧凑适配，轻微缩小</option>
               </select>
+            </label>
+            <label>
+              译文字号比例
+              <div class="range-row">
+                <input id="fontScale" type="range" min="60" max="115" step="5" value="100">
+                <output id="fontScaleValue">100%</output>
+              </div>
             </label>
             <label>
               模型
@@ -140,6 +147,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=11" type="module"></script>
+    <script src="app.js?v=12" type="module"></script>
   </body>
 </html>

@@ -22,6 +22,8 @@ const els = {
   previewMeta: document.querySelector("#previewMeta"),
   translationDirection: document.querySelector("#translationDirection"),
   pptLayoutMode: document.querySelector("#pptLayoutMode"),
+  fontScale: document.querySelector("#fontScale"),
+  fontScaleValue: document.querySelector("#fontScaleValue"),
   modelName: document.querySelector("#modelName"),
   apiKey: document.querySelector("#apiKey"),
   slideCount: document.querySelector("#slideCount"),
@@ -36,7 +38,7 @@ const wordPathPattern = /^word\/(?:document|header\d+|footer\d+|footnotes|endnot
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
-const SETTINGS_VERSION = 3;
+const SETTINGS_VERSION = 4;
 const DEEPSEEK_API_BASE = "https://api.deepseek.com";
 const TRANSLATE_PROXY = "./api/translate";
 const parser = new DOMParser();
@@ -45,7 +47,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=11").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=12").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -82,12 +84,15 @@ els.previewDialog.addEventListener("click", (event) => {
 [
   els.translationDirection,
   els.pptLayoutMode,
+  els.fontScale,
   els.modelName,
   els.apiKey,
 ].forEach((element) => {
-  element?.addEventListener("change", saveSettings);
-  element?.addEventListener("input", saveSettings);
+  element?.addEventListener("change", handleSettingsChange);
+  element?.addEventListener("input", handleSettingsChange);
 });
+
+updateFontScaleLabel();
 
 async function loadOfficeFile(file) {
   try {
@@ -622,8 +627,10 @@ function applyPresentationLayout(paragraph, segment) {
   } else if (layout.autofit === "spAutoFit") {
     bodyProperties.append(document.createElementNS(DRAWING_NS, "a:spAutoFit"));
   } else {
-    const noAutofit = document.createElementNS(DRAWING_NS, "a:noAutofit");
-    bodyProperties.append(noAutofit);
+    const autoFit = document.createElementNS(DRAWING_NS, "a:normAutofit");
+    autoFit.setAttribute("fontScale", "85000");
+    autoFit.setAttribute("lnSpcReduction", "12000");
+    bodyProperties.append(autoFit);
   }
 }
 
@@ -662,11 +669,12 @@ function getLengthScale(source, translation) {
   const sourceLength = Math.max(1, [...source].length);
   const translationLength = Math.max(1, [...translation].length);
   const ratio = translationLength / sourceLength;
+  const userScale = getUserFontScale();
 
-  if (ratio <= 1.25) return 1;
-  if (ratio <= 1.75) return 0.94;
-  if (ratio <= 2.4) return 0.9;
-  return 0.88;
+  if (ratio <= 1.25) return userScale;
+  if (ratio <= 1.75) return Math.min(userScale, 0.94);
+  if (ratio <= 2.4) return Math.min(userScale, 0.9);
+  return Math.min(userScale, 0.88);
 }
 
 function getPresentationLengthScale(segment) {
@@ -674,7 +682,7 @@ function getPresentationLengthScale(segment) {
     return getLengthScale(segment.original, segment.translation);
   }
 
-  return 1;
+  return getUserFontScale();
 }
 
 function getPptLayoutMode() {
@@ -704,12 +712,7 @@ function shouldUseSingleLine(segment) {
   const mode = getPptLayoutMode();
   if (mode === "compact-fit") return false;
   if (mode === "keep-size") return true;
-
-  const layout = segment.layout || {};
-  if (layout.hasManualBreaks) return false;
-  if (layout.textBodyParagraphCount > 1) return false;
-
-  return true;
+  return false;
 }
 
 function countTextBodyParagraphs(textBody) {
@@ -745,8 +748,10 @@ function loadSettings() {
     }
     setElementValue(els.translationDirection, settings.translationDirection);
     setElementValue(els.pptLayoutMode, settings.pptLayoutMode);
+    setElementValue(els.fontScale, settings.fontScale);
     setElementValue(els.modelName, settings.modelName);
     setElementValue(els.apiKey, settings.apiKey);
+    updateFontScaleLabel();
   } catch {
     localStorage.removeItem(SETTINGS_KEY);
   }
@@ -757,11 +762,27 @@ function saveSettings() {
     settingsVersion: SETTINGS_VERSION,
     translationDirection: els.translationDirection?.value || "",
     pptLayoutMode: els.pptLayoutMode?.value || "",
+    fontScale: els.fontScale?.value || "100",
     modelName: els.modelName?.value || "",
     apiKey: els.apiKey?.value || "",
   };
 
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function handleSettingsChange() {
+  updateFontScaleLabel();
+  saveSettings();
+}
+
+function updateFontScaleLabel() {
+  if (!els.fontScale || !els.fontScaleValue) return;
+  els.fontScaleValue.textContent = `${els.fontScale.value}%`;
+}
+
+function getUserFontScale() {
+  const value = Number(els.fontScale?.value || 100);
+  return Math.max(0.6, Math.min(1.15, value / 100));
 }
 
 function setElementValue(element, value) {

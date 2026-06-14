@@ -207,6 +207,24 @@ select {
   padding: 0 12px;
 }
 
+input[type="range"] {
+  padding: 0;
+}
+
+.range-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px;
+  gap: 10px;
+  align-items: center;
+}
+
+.range-row output {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: right;
+}
+
 select {
   appearance: none;
   background:
