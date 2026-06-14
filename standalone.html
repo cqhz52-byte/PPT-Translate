@@ -379,6 +379,59 @@ td:first-child {
   line-height: 1.5;
 }
 
+.segment-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.segment-range {
+  display: grid;
+  grid-template-columns: auto minmax(90px, 1fr) 64px;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.segment-range input {
+  height: 24px;
+}
+
+.segment-range output {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.segment-check {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.segment-check input {
+  width: 16px;
+  height: 16px;
+}
+
+.segment-reset {
+  width: auto;
+  min-width: 48px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
 .empty-row td {
   border-bottom: 0;
 }
@@ -582,6 +635,15 @@ td:first-child {
     width: auto;
   }
 
+  .segment-controls,
+  .segment-range {
+    grid-template-columns: 1fr;
+  }
+
+  .segment-check {
+    justify-content: flex-start;
+  }
+
   .preview-dialog {
     width: calc(100vw - 14px);
     max-height: calc(100vh - 14px);
@@ -602,7 +664,7 @@ td:first-child {
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v13 · 动态版式预览 · 可调字号</p>
+          <p class="version">v14 · 局部字号/单行控制</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -968,7 +1030,7 @@ function normalizePresentationRunStyle(textNode, segment) {
   [...runProperties.getElementsByTagNameNS(DRAWING_NS, "sym")].forEach((node) => node.remove());
 }
 
-function normalizeWordRunStyle(textNode, source, translation) {
+function normalizeWordRunStyle(textNode, segment) {
   const run = textNode.parentElement;
   if (!run) return;
 
@@ -979,7 +1041,7 @@ function normalizeWordRunStyle(textNode, source, translation) {
   fonts.setAttributeNS(WORD_NS, "w:eastAsia", "Microsoft YaHei");
   fonts.setAttributeNS(WORD_NS, "w:cs", "Arial");
 
-  const scale = getLengthScale(source, translation);
+  const scale = getLengthScale(segment.original, segment.translation, segment);
   const sizeNode = [...runProperties.children].find((node) => node.localName === "sz");
   const currentSize = Number(sizeNode?.getAttributeNS(WORD_NS, "val") || sizeNode?.getAttribute("w:val") || 0);
 
@@ -1068,11 +1130,11 @@ function setTypeface(parent, localName, typeface) {
   node.setAttribute("typeface", typeface);
 }
 
-function getLengthScale(source, translation) {
+function getLengthScale(source, translation, segment) {
   const sourceLength = Math.max(1, [...source].length);
   const translationLength = Math.max(1, [...translation].length);
   const ratio = translationLength / sourceLength;
-  const userScale = getUserFontScale();
+  const userScale = getActiveFontScale(segment);
 
   if (ratio <= 1.25) return userScale;
   if (ratio <= 1.75) return Math.min(userScale, 0.94);
@@ -1082,14 +1144,23 @@ function getLengthScale(source, translation) {
 
 function getPresentationLengthScale(segment) {
   if (getPptLayoutMode() === "compact-fit" || shouldUseSingleLine(segment)) {
-    return getLengthScale(segment.original, segment.translation);
+    return getLengthScale(segment.original, segment.translation, segment);
   }
 
-  return getUserFontScale();
+  return getActiveFontScale(segment);
 }
 
 function getPptLayoutMode() {
   return els.pptLayoutMode?.value || "smart";
+}
+
+function getActiveFontScale(segment) {
+  const override = segment?.overrides?.fontScale;
+  if (override) {
+    return Math.max(0.6, Math.min(1.15, Number(override) / 100));
+  }
+
+  return getUserFontScale();
 }
 
 async function readSlideSize() {
@@ -1128,10 +1199,105 @@ function inspectPresentationLayout(paragraph, original) {
 }
 
 function shouldUseSingleLine(segment) {
+  if (segment?.overrides?.singleLine) return true;
   const mode = getPptLayoutMode();
   if (mode === "compact-fit") return false;
   if (mode === "keep-size") return true;
   return false;
+}
+
+function createSegmentControls(segment, index) {
+  const controls = document.createElement("div");
+  controls.className = "segment-controls";
+
+  const scaleLabel = document.createElement("label");
+  scaleLabel.className = "segment-range";
+
+  const scaleText = document.createElement("span");
+  scaleText.textContent = "本段字号";
+
+  const scaleInput = document.createElement("input");
+  scaleInput.type = "range";
+  scaleInput.min = "60";
+  scaleInput.max = "115";
+  scaleInput.step = "5";
+  scaleInput.value = segment.overrides.fontScale || els.fontScale.value || "100";
+  scaleInput.dataset.index = String(index);
+
+  const scaleValue = document.createElement("output");
+  scaleValue.textContent = segment.overrides.fontScale ? `${segment.overrides.fontScale}%` : "跟随全局";
+
+  scaleInput.addEventListener("input", () => {
+    const current = state.segments[Number(scaleInput.dataset.index)];
+    current.overrides.fontScale = scaleInput.value;
+    scaleValue.textContent = `${scaleInput.value}%`;
+    rerenderPreviewIfOpen();
+  });
+
+  scaleLabel.append(scaleText, scaleInput, scaleValue);
+
+  const singleLineLabel = document.createElement("label");
+  singleLineLabel.className = "segment-check";
+
+  const singleLineInput = document.createElement("input");
+  singleLineInput.type = "checkbox";
+  singleLineInput.checked = Boolean(segment.overrides.singleLine);
+  singleLineInput.dataset.index = String(index);
+  singleLineInput.addEventListener("change", () => {
+    state.segments[Number(singleLineInput.dataset.index)].overrides.singleLine = singleLineInput.checked;
+    rerenderPreviewIfOpen();
+  });
+
+  const singleLineText = document.createElement("span");
+  singleLineText.textContent = "本段单行";
+  singleLineLabel.append(singleLineInput, singleLineText);
+
+  const resetButton = document.createElement("button");
+  resetButton.type = "button";
+  resetButton.className = "segment-reset";
+  resetButton.textContent = "重置";
+  resetButton.dataset.index = String(index);
+  resetButton.addEventListener("click", () => {
+    const current = state.segments[Number(resetButton.dataset.index)];
+    current.overrides = createSegmentOverrides();
+    renderSegments();
+    updateStats();
+    rerenderPreviewIfOpen();
+  });
+
+  const pageButton = document.createElement("button");
+  pageButton.type = "button";
+  pageButton.className = "segment-reset";
+  pageButton.textContent = "本页";
+  pageButton.title = "把本段设置应用到同一页";
+  pageButton.dataset.index = String(index);
+  pageButton.addEventListener("click", () => {
+    const current = state.segments[Number(pageButton.dataset.index)];
+    state.segments.forEach((item) => {
+      if (item.path !== current.path || item.locationLabel !== current.locationLabel) return;
+      item.overrides = {
+        fontScale: current.overrides.fontScale,
+        singleLine: current.type === "pptx" ? current.overrides.singleLine : false,
+      };
+    });
+    renderSegments();
+    updateStats();
+    rerenderPreviewIfOpen();
+  });
+
+  controls.append(scaleLabel);
+  if (segment.type === "pptx") {
+    controls.append(singleLineLabel);
+  }
+  controls.append(pageButton, resetButton);
+  return controls;
+}
+
+function createSegmentOverrides() {
+  return {
+    fontScale: "",
+    singleLine: false,
+  };
 }
 
 function countTextBodyParagraphs(textBody) {
@@ -1221,7 +1387,11 @@ function getPreviewFontCqw(segment) {
 function handleSettingsChange() {
   updateFontScaleLabel();
   saveSettings();
-  if (els.previewDialog.open) renderPreview();
+  rerenderPreviewIfOpen();
+}
+
+function rerenderPreviewIfOpen() {
+  if (els.previewDialog?.open) renderPreview();
 }
 
 function updateFontScaleLabel() {

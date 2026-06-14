@@ -371,6 +371,59 @@ td:first-child {
   line-height: 1.5;
 }
 
+.segment-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.segment-range {
+  display: grid;
+  grid-template-columns: auto minmax(90px, 1fr) 64px;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.segment-range input {
+  height: 24px;
+}
+
+.segment-range output {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.segment-check {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.segment-check input {
+  width: 16px;
+  height: 16px;
+}
+
+.segment-reset {
+  width: auto;
+  min-width: 48px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
 .empty-row td {
   border-bottom: 0;
 }
@@ -572,6 +625,15 @@ td:first-child {
   th:first-child,
   td:first-child {
     width: auto;
+  }
+
+  .segment-controls,
+  .segment-range {
+    grid-template-columns: 1fr;
+  }
+
+  .segment-check {
+    justify-content: flex-start;
   }
 
   .preview-dialog {
