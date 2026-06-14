@@ -1,4 +1,4 @@
-module.exports = async function handler(req, res) {
+async function handler(req, res) {
   setCors(res);
 
   if (req.method === "OPTIONS") {
@@ -81,7 +81,10 @@ module.exports = async function handler(req, res) {
   } catch (error) {
     sendJson(res, 500, { error: error.message || "Server error" });
   }
-};
+}
+
+module.exports = handler;
+module.exports.default = handler;
 
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -103,12 +106,15 @@ function sendJson(res, statusCode, payload) {
 async function readRequestBody(req) {
   if (typeof req.body === "string") return JSON.parse(req.body || "{}");
   if (req.body && typeof req.body === "object") return req.body;
+  if (typeof req.on !== "function") return {};
 
   const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
+  await new Promise((resolve, reject) => {
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", resolve);
+    req.on("error", reject);
+  });
 
-  const text = Buffer.concat(chunks).toString("utf8");
+  const text = Buffer.concat(chunks.map((chunk) => (Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))).toString("utf8");
   return text ? JSON.parse(text) : {};
 }
