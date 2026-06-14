@@ -490,6 +490,45 @@ td:first-child {
   font-size: 12px;
 }
 
+.slide-preview {
+  container-type: inline-size;
+  position: relative;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background:
+    linear-gradient(90deg, rgba(22, 90, 114, 0.04) 1px, transparent 1px),
+    linear-gradient(rgba(22, 90, 114, 0.04) 1px, transparent 1px),
+    #fff;
+  background-size: 24px 24px;
+}
+
+.slide-text-box {
+  position: absolute;
+  overflow: hidden;
+  padding: 2px 3px;
+  border: 1px dashed rgba(22, 90, 114, 0.38);
+  color: #07558a;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  font-weight: 700;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.slide-text-box.pending {
+  color: var(--muted);
+  opacity: 0.68;
+}
+
+.preview-fallback {
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 @media (max-width: 860px) {
   .shell {
     padding: 14px;

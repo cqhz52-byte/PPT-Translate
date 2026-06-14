@@ -4,6 +4,7 @@ const state = {
   zip: null,
   segments: [],
   slideCount: 0,
+  slideSize: { cx: 12192000, cy: 6858000 },
   installPrompt: null,
 };
 
@@ -38,7 +39,7 @@ const wordPathPattern = /^word\/(?:document|header\d+|footer\d+|footnotes|endnot
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
-const SETTINGS_VERSION = 4;
+const SETTINGS_VERSION = 5;
 const DEEPSEEK_API_BASE = "https://api.deepseek.com";
 const TRANSLATE_PROXY = "./api/translate";
 const parser = new DOMParser();
@@ -47,7 +48,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=12").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=13").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -114,6 +115,7 @@ async function loadOfficeFile(file) {
     state.zip = await JSZip.loadAsync(file);
     state.segments = [];
     state.slideCount = 0;
+    state.slideSize = { cx: 12192000, cy: 6858000 };
 
     if (state.fileType === "docx") {
       await loadWordDocument();
@@ -135,6 +137,7 @@ async function loadOfficeFile(file) {
 }
 
 async function loadPresentation() {
+    state.slideSize = await readSlideSize();
     const slideFiles = Object.keys(state.zip.files)
       .map((path) => ({ path, match: path.match(slidePathPattern) }))
       .filter((item) => item.match)
@@ -480,22 +483,64 @@ function renderPreview() {
     title.textContent = group.label;
     section.append(title);
 
-    group.segments.forEach((segment) => {
-      const item = document.createElement("article");
-      item.className = `preview-item${segment.translation.trim() ? "" : " pending"}`;
-
-      const text = document.createElement("p");
-      text.textContent = segment.translation.trim() || segment.original;
-
-      const meta = document.createElement("span");
-      meta.textContent = segment.translation.trim() ? "译文" : "未翻译，暂用原文";
-
-      item.append(text, meta);
-      section.append(item);
-    });
+    if (state.fileType === "pptx") {
+      section.append(createSlidePreview(group.segments));
+    } else {
+      group.segments.forEach((segment) => {
+        section.append(createPreviewItem(segment));
+      });
+    }
 
     els.previewBody.append(section);
   });
+}
+
+function createPreviewItem(segment) {
+  const item = document.createElement("article");
+  item.className = `preview-item${segment.translation.trim() ? "" : " pending"}`;
+
+  const text = document.createElement("p");
+  text.textContent = segment.translation.trim() || segment.original;
+
+  const meta = document.createElement("span");
+  meta.textContent = segment.translation.trim() ? "译文" : "未翻译，暂用原文";
+
+  item.append(text, meta);
+  return item;
+}
+
+function createSlidePreview(segments) {
+  const slide = document.createElement("div");
+  slide.className = "slide-preview";
+  slide.style.aspectRatio = `${state.slideSize.cx} / ${state.slideSize.cy}`;
+
+  segments.forEach((segment) => {
+    if (!segment.layout?.bounds) return;
+
+    const box = document.createElement("div");
+    box.className = `slide-text-box${segment.translation.trim() ? "" : " pending"}`;
+
+    const { x, y, cx, cy } = segment.layout.bounds;
+    box.style.left = `${(x / state.slideSize.cx) * 100}%`;
+    box.style.top = `${(y / state.slideSize.cy) * 100}%`;
+    box.style.width = `${(cx / state.slideSize.cx) * 100}%`;
+    box.style.height = `${(cy / state.slideSize.cy) * 100}%`;
+    box.style.fontSize = `${getPreviewFontCqw(segment)}cqw`;
+    box.style.whiteSpace = shouldUseSingleLine(segment) ? "nowrap" : "normal";
+
+    box.textContent = segment.translation.trim() || segment.original;
+    slide.append(box);
+  });
+
+  if (!slide.children.length) {
+    const fallback = document.createElement("div");
+    fallback.className = "preview-fallback";
+    fallback.textContent = "这一页没有可定位的文本框，显示文字清单。";
+    slide.append(fallback);
+    segments.forEach((segment) => slide.append(createPreviewItem(segment)));
+  }
+
+  return slide;
 }
 
 function groupSegmentsForPreview() {
@@ -689,6 +734,20 @@ function getPptLayoutMode() {
   return els.pptLayoutMode?.value || "smart";
 }
 
+async function readSlideSize() {
+  const file = state.zip.file("ppt/presentation.xml");
+  if (!file) return { cx: 12192000, cy: 6858000 };
+
+  const xmlText = await file.async("text");
+  const doc = parser.parseFromString(xmlText, "application/xml");
+  const size = doc.getElementsByTagName("p:sldSz")[0] || [...doc.getElementsByTagName("*")].find((node) => node.localName === "sldSz");
+
+  return {
+    cx: Number(size?.getAttribute("cx")) || 12192000,
+    cy: Number(size?.getAttribute("cy")) || 6858000,
+  };
+}
+
 function inspectPresentationLayout(paragraph, original) {
   const textBody = paragraph.parentElement;
   const bodyProperties = [...(textBody?.children || [])].find((node) => node.localName === "bodyPr");
@@ -705,6 +764,8 @@ function inspectPresentationLayout(paragraph, original) {
     textLength: [...original].length,
     textNodeCount: [...paragraph.getElementsByTagNameNS(DRAWING_NS, "t")].length,
     textBodyParagraphCount: countTextBodyParagraphs(textBody),
+    bounds: getTextBounds(paragraph),
+    fontSize: getParagraphFontSize(paragraph),
   };
 }
 
@@ -770,9 +831,39 @@ function saveSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
+function getTextBounds(paragraph) {
+  const shape = paragraph.parentElement?.parentElement;
+  const transform = [...(shape?.getElementsByTagNameNS(DRAWING_NS, "xfrm") || [])][0];
+  const offset = [...(transform?.getElementsByTagNameNS(DRAWING_NS, "off") || [])][0];
+  const extent = [...(transform?.getElementsByTagNameNS(DRAWING_NS, "ext") || [])][0];
+
+  if (!offset || !extent) return null;
+
+  return {
+    x: Number(offset.getAttribute("x")) || 0,
+    y: Number(offset.getAttribute("y")) || 0,
+    cx: Number(extent.getAttribute("cx")) || 0,
+    cy: Number(extent.getAttribute("cy")) || 0,
+  };
+}
+
+function getParagraphFontSize(paragraph) {
+  const runProperties = [...paragraph.getElementsByTagNameNS(DRAWING_NS, "rPr")].find((node) => node.getAttribute("sz"));
+  return Number(runProperties?.getAttribute("sz")) || 1800;
+}
+
+function getPreviewFontCqw(segment) {
+  const fontSize = segment.layout?.fontSize || 1800;
+  const originalPt = fontSize / 100;
+  const scaledPt = Math.max(7, originalPt * getPresentationLengthScale(segment));
+  const slideWidthPt = state.slideSize.cx / 12700;
+  return (scaledPt / slideWidthPt) * 100;
+}
+
 function handleSettingsChange() {
   updateFontScaleLabel();
   saveSettings();
+  if (els.previewDialog.open) renderPreview();
 }
 
 function updateFontScaleLabel() {
