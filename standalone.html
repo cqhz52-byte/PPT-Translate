@@ -641,10 +641,11 @@ td:first-child {
 }
 
 .slide-box-tools output {
-  min-width: 38px;
+  min-width: 74px;
   color: var(--ink);
   font-size: 12px;
   font-weight: 800;
+  white-space: nowrap;
 }
 
 .slide-box-tools button {
@@ -776,7 +777,7 @@ td:first-child {
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v16 · 可拖动预览框</p>
+          <p class="version">v17 · 导出字号对齐预览</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -975,26 +976,6 @@ const parser = new DOMParser();
 const serializer = new XMLSerializer();
 
 loadSettings();
-
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=16").catch(() => {
-    showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
-  });
-}
-
-window.addEventListener("beforeinstallprompt", (event) => {
-  event.preventDefault();
-  state.installPrompt = event;
-  els.installButton.hidden = false;
-});
-
-els.installButton.addEventListener("click", async () => {
-  if (!state.installPrompt) return;
-  state.installPrompt.prompt();
-  await state.installPrompt.userChoice;
-  state.installPrompt = null;
-  els.installButton.hidden = true;
-});
 
 els.fileInput.addEventListener("change", async (event) => {
   const [file] = event.target.files;
@@ -1528,12 +1509,12 @@ function createPreviewBoxTools(segment, index) {
   scaleInput.title = "本段字号";
 
   const scaleValue = document.createElement("output");
-  scaleValue.textContent = segment.overrides.fontScale ? `${segment.overrides.fontScale}%` : `${els.fontScale.value || "100"}%`;
+  scaleValue.textContent = getPreviewScaleLabel(segment);
 
   scaleInput.addEventListener("input", () => {
     const current = state.segments[index];
     current.overrides.fontScale = scaleInput.value;
-    scaleValue.textContent = `${scaleInput.value}%`;
+    scaleValue.textContent = getPreviewScaleLabel(current);
     rerenderPreviewIfOpen();
   });
 
@@ -1714,13 +1695,7 @@ function normalizePresentationRunStyle(textNode, segment) {
   if (!run) return;
 
   const runProperties = ensureChild(run, "rPr");
-  const scale = getPresentationLengthScale(segment);
-  const currentSize = Number(runProperties.getAttribute("sz") || 0);
-
-  if (currentSize > 0 && scale < 1) {
-    const nextSize = Math.max(900, Math.round(currentSize * scale));
-    runProperties.setAttribute("sz", String(nextSize));
-  }
+  runProperties.setAttribute("sz", String(getPresentationExportFontSize(segment)));
 
   setTypeface(runProperties, "latin", "Arial");
   setTypeface(runProperties, "ea", "Microsoft YaHei");
@@ -2118,11 +2093,20 @@ function getParagraphFontSize(paragraph) {
 }
 
 function getPreviewFontCqw(segment) {
-  const fontSize = segment.layout?.fontSize || 1800;
-  const originalPt = fontSize / 100;
-  const scaledPt = Math.max(7, originalPt * getPresentationLengthScale(segment));
+  const scaledPt = getPresentationExportFontSize(segment) / 100;
   const slideWidthPt = state.slideSize.cx / 12700;
   return (scaledPt / slideWidthPt) * 100;
+}
+
+function getPresentationExportFontSize(segment) {
+  const baseSize = Number(segment.layout?.fontSize || 1800);
+  return Math.max(700, Math.round(baseSize * getPresentationLengthScale(segment)));
+}
+
+function getPreviewScaleLabel(segment) {
+  const scale = Math.round(getActiveFontScale(segment) * 100);
+  const points = Math.round(getPresentationExportFontSize(segment) / 100);
+  return `${scale}% · ${points}pt`;
 }
 
 function handleSettingsChange() {

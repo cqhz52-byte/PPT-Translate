@@ -12,11 +12,15 @@ const body = sourceHtml.match(/<body>([\s\S]*?)<\/body>/)?.[1]
   .replace(/\s*<script src="app\.js\?v=\d+" type="module"><\/script>/, "");
 const app = read("app.js")
   .replace(
-    /if \("serviceWorker" in navigator\) \{[\s\S]*?\n\}\n\n/,
+    /if \("serviceWorker" in navigator\) \{[\s\S]*?\r?\n\}\r?\n\r?\n/,
     ""
   )
   .replace(
-    /window\.addEventListener\("beforeinstallprompt"[\s\S]*?els\.installButton\.addEventListener\("click"[\s\S]*?\n\}\);\n\n/,
+    /window\.addEventListener\("beforeinstallprompt"[\s\S]*?\r?\n\}\);\r?\n\r?\n/,
+    ""
+  )
+  .replace(
+    /els\.installButton\.addEventListener\("click"[\s\S]*?\r?\n\}\);\r?\n\r?\n/,
     ""
   );
 

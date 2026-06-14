@@ -49,7 +49,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=16").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=17").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -600,12 +600,12 @@ function createPreviewBoxTools(segment, index) {
   scaleInput.title = "本段字号";
 
   const scaleValue = document.createElement("output");
-  scaleValue.textContent = segment.overrides.fontScale ? `${segment.overrides.fontScale}%` : `${els.fontScale.value || "100"}%`;
+  scaleValue.textContent = getPreviewScaleLabel(segment);
 
   scaleInput.addEventListener("input", () => {
     const current = state.segments[index];
     current.overrides.fontScale = scaleInput.value;
-    scaleValue.textContent = `${scaleInput.value}%`;
+    scaleValue.textContent = getPreviewScaleLabel(current);
     rerenderPreviewIfOpen();
   });
 
@@ -786,13 +786,7 @@ function normalizePresentationRunStyle(textNode, segment) {
   if (!run) return;
 
   const runProperties = ensureChild(run, "rPr");
-  const scale = getPresentationLengthScale(segment);
-  const currentSize = Number(runProperties.getAttribute("sz") || 0);
-
-  if (currentSize > 0 && scale < 1) {
-    const nextSize = Math.max(900, Math.round(currentSize * scale));
-    runProperties.setAttribute("sz", String(nextSize));
-  }
+  runProperties.setAttribute("sz", String(getPresentationExportFontSize(segment)));
 
   setTypeface(runProperties, "latin", "Arial");
   setTypeface(runProperties, "ea", "Microsoft YaHei");
@@ -1190,11 +1184,20 @@ function getParagraphFontSize(paragraph) {
 }
 
 function getPreviewFontCqw(segment) {
-  const fontSize = segment.layout?.fontSize || 1800;
-  const originalPt = fontSize / 100;
-  const scaledPt = Math.max(7, originalPt * getPresentationLengthScale(segment));
+  const scaledPt = getPresentationExportFontSize(segment) / 100;
   const slideWidthPt = state.slideSize.cx / 12700;
   return (scaledPt / slideWidthPt) * 100;
+}
+
+function getPresentationExportFontSize(segment) {
+  const baseSize = Number(segment.layout?.fontSize || 1800);
+  return Math.max(700, Math.round(baseSize * getPresentationLengthScale(segment)));
+}
+
+function getPreviewScaleLabel(segment) {
+  const scale = Math.round(getActiveFontScale(segment) * 100);
+  const points = Math.round(getPresentationExportFontSize(segment) / 100);
+  return `${scale}% · ${points}pt`;
 }
 
 function handleSettingsChange() {

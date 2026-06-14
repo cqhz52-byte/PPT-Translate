@@ -633,10 +633,11 @@ td:first-child {
 }
 
 .slide-box-tools output {
-  min-width: 38px;
+  min-width: 74px;
   color: var(--ink);
   font-size: 12px;
   font-weight: 800;
+  white-space: nowrap;
 }
 
 .slide-box-tools button {
