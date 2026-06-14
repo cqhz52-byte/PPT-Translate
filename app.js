@@ -5,6 +5,7 @@ const state = {
   segments: [],
   slideCount: 0,
   slideSize: { cx: 12192000, cy: 6858000 },
+  slideVisuals: new Map(),
   installPrompt: null,
 };
 
@@ -49,7 +50,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=17").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=18").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -118,6 +119,7 @@ async function loadOfficeFile(file) {
     state.segments = [];
     state.slideCount = 0;
     state.slideSize = { cx: 12192000, cy: 6858000 };
+    state.slideVisuals = new Map();
 
     if (state.fileType === "docx") {
       await loadWordDocument();
@@ -155,6 +157,8 @@ async function loadPresentation() {
       if (parseError) {
         throw new Error(`第 ${slideNumber} 页 XML 解析失败。`);
       }
+
+      state.slideVisuals.set(item.path, inspectSlideVisuals(doc));
 
       const paragraphs = [...doc.getElementsByTagNameNS(DRAWING_NS, "p")];
       paragraphs.forEach((paragraph, paragraphIndex) => {
@@ -536,6 +540,21 @@ function createSlidePreview(segments) {
   const slide = document.createElement("div");
   slide.className = "slide-preview";
   slide.style.aspectRatio = `${state.slideSize.cx} / ${state.slideSize.cy}`;
+  const slidePath = segments[0]?.path || "";
+
+  (state.slideVisuals.get(slidePath) || []).forEach((visual, index) => {
+    const box = document.createElement("div");
+    box.className = "slide-image-box";
+    box.style.left = `${toSlidePercentX(visual.bounds.x)}%`;
+    box.style.top = `${toSlidePercentY(visual.bounds.y)}%`;
+    box.style.width = `${toSlidePercentX(visual.bounds.cx)}%`;
+    box.style.height = `${toSlidePercentY(visual.bounds.cy)}%`;
+
+    const label = document.createElement("span");
+    label.textContent = visual.name || `图片 ${index + 1}`;
+    box.append(label);
+    slide.append(box);
+  });
 
   segments.forEach((segment) => {
     if (!segment.layout?.bounds) return;
@@ -556,6 +575,7 @@ function createSlidePreview(segments) {
     box.style.height = `${(cy / state.slideSize.cy) * 100}%`;
     box.style.fontSize = `${getPreviewFontCqw(segment)}cqw`;
     box.style.whiteSpace = shouldUseSingleLine(segment) ? "nowrap" : "normal";
+    applyPreviewTextStyle(box, segment);
 
     const text = document.createElement("span");
     text.className = "slide-box-text";
@@ -764,6 +784,7 @@ function resetApp(clearInput = true) {
   state.zip = null;
   state.segments = [];
   state.slideCount = 0;
+  state.slideVisuals = new Map();
   if (clearInput) els.fileInput.value = "";
   els.fileMeta.textContent = "支持 PPTX / DOCX；旧版 PPT/DOC 请先另存";
   renderSegments();
@@ -973,7 +994,39 @@ function inspectPresentationLayout(paragraph, original) {
     textBodyParagraphCount: countTextBodyParagraphs(textBody),
     bounds: getTextBounds(paragraph),
     fontSize: getParagraphFontSize(paragraph),
+    insets: getTextBodyInsets(bodyProperties),
+    runStyle: getParagraphRunStyle(paragraph),
+    paragraphStyle: getParagraphStyle(paragraph),
   };
+}
+
+function inspectSlideVisuals(doc) {
+  return [...doc.getElementsByTagName("*")]
+    .filter((node) => node.localName === "pic")
+    .map((picture, index) => {
+      const shapeProperties = [...picture.children].find((node) => node.localName === "spPr");
+      const transform = [...(shapeProperties?.children || [])].find((node) => node.localName === "xfrm");
+      const offset = [...(transform?.children || [])].find((node) => node.localName === "off");
+      const extent = [...(transform?.children || [])].find((node) => node.localName === "ext");
+      if (!offset || !extent) return null;
+
+      const nameNode = [...picture.getElementsByTagName("*")].find((node) => node.localName === "cNvPr");
+      const bounds = {
+        x: Number(offset.getAttribute("x")) || 0,
+        y: Number(offset.getAttribute("y")) || 0,
+        cx: Number(extent.getAttribute("cx")) || 0,
+        cy: Number(extent.getAttribute("cy")) || 0,
+      };
+
+      if (bounds.cx <= 0 || bounds.cy <= 0) return null;
+
+      return {
+        type: "image",
+        name: nameNode?.getAttribute("name") || `图片 ${index + 1}`,
+        bounds,
+      };
+    })
+    .filter(Boolean);
 }
 
 function shouldUseSingleLine(segment) {
@@ -1183,10 +1236,106 @@ function getParagraphFontSize(paragraph) {
   return Number(runProperties?.getAttribute("sz")) || 1800;
 }
 
+function getTextBodyInsets(bodyProperties) {
+  const defaultInset = 91440;
+  return {
+    left: getNumericAttribute(bodyProperties, "lIns", defaultInset),
+    right: getNumericAttribute(bodyProperties, "rIns", defaultInset),
+    top: getNumericAttribute(bodyProperties, "tIns", 45720),
+    bottom: getNumericAttribute(bodyProperties, "bIns", 45720),
+  };
+}
+
+function getParagraphRunStyle(paragraph) {
+  const runProperties = [...paragraph.getElementsByTagNameNS(DRAWING_NS, "rPr")].find((node) => node.getAttribute("sz")) ||
+    [...paragraph.getElementsByTagNameNS(DRAWING_NS, "rPr")][0];
+  const latin = [...(runProperties?.children || [])].find((node) => node.localName === "latin")?.getAttribute("typeface");
+  const eastAsian = [...(runProperties?.children || [])].find((node) => node.localName === "ea")?.getAttribute("typeface");
+
+  return {
+    latin: latin || "Arial",
+    eastAsian: eastAsian || "Microsoft YaHei",
+    bold: runProperties?.getAttribute("b") === "1",
+    italic: runProperties?.getAttribute("i") === "1",
+  };
+}
+
+function getParagraphStyle(paragraph) {
+  const paragraphProperties = [...paragraph.children].find((node) => node.localName === "pPr");
+  return {
+    align: paragraphProperties?.getAttribute("algn") || "",
+    lineHeight: getParagraphLineHeight(paragraphProperties),
+  };
+}
+
+function getParagraphLineHeight(paragraphProperties) {
+  const lineSpacing = [...(paragraphProperties?.children || [])].find((node) => node.localName === "lnSpc");
+  const percent = [...(lineSpacing?.children || [])].find((node) => node.localName === "spcPct");
+  const points = [...(lineSpacing?.children || [])].find((node) => node.localName === "spcPts");
+  const percentValue = Number(percent?.getAttribute("val"));
+  const pointValue = Number(points?.getAttribute("val"));
+
+  if (percentValue > 0) return Math.max(0.8, Math.min(2.2, percentValue / 100000));
+  if (pointValue > 0) return Math.max(0.8, Math.min(2.2, pointValue / 100));
+  return 1;
+}
+
+function applyPreviewTextStyle(box, segment) {
+  const layout = segment.layout || {};
+  const insets = layout.insets || {};
+  const runStyle = layout.runStyle || {};
+  const paragraphStyle = layout.paragraphStyle || {};
+
+  box.style.padding = [
+    `${emuToPreviewCqw(insets.top || 0)}cqw`,
+    `${emuToPreviewCqw(insets.right || 0)}cqw`,
+    `${emuToPreviewCqw(insets.bottom || 0)}cqw`,
+    `${emuToPreviewCqw(insets.left || 0)}cqw`,
+  ].join(" ");
+  box.style.fontFamily = `"${runStyle.latin || "Arial"}", "${runStyle.eastAsian || "Microsoft YaHei"}", sans-serif`;
+  box.style.fontWeight = runStyle.bold ? "700" : "400";
+  box.style.fontStyle = runStyle.italic ? "italic" : "normal";
+  box.style.lineHeight = String(paragraphStyle.lineHeight || 1);
+  box.style.textAlign = mapPptAlignment(paragraphStyle.align);
+}
+
+function emuToPreviewCqw(value) {
+  return (Number(value || 0) / state.slideSize.cx) * 100;
+}
+
+function getNumericAttribute(node, name, fallback) {
+  const value = Number(node?.getAttribute(name));
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function mapPptAlignment(value) {
+  const map = {
+    ctr: "center",
+    r: "right",
+    just: "justify",
+    dist: "justify",
+  };
+  return map[value] || "left";
+}
+
 function getPreviewFontCqw(segment) {
-  const scaledPt = getPresentationExportFontSize(segment) / 100;
+  const scaledPt = (getPresentationExportFontSize(segment) / 100) * getPreviewAutofitScale(segment);
   const slideWidthPt = state.slideSize.cx / 12700;
   return (scaledPt / slideWidthPt) * 100;
+}
+
+function getPreviewAutofitScale(segment) {
+  if (shouldUseSingleLine(segment)) return 0.85;
+  if (getPptLayoutMode() === "compact-fit") return 0.88;
+
+  const layout = segment.layout || {};
+  if (layout.autofit === "normAutofit") {
+    const fontScale = Number(layout.autofitAttrs?.fontScale);
+    return fontScale > 0 ? Math.max(0.6, Math.min(1, fontScale / 100000)) : 1;
+  }
+
+  if (layout.autofit === "spAutoFit") return 1;
+  return 0.85;
 }
 
 function getPresentationExportFontSize(segment) {
