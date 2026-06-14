@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon.svg">
-    <link rel="stylesheet" href="styles.css?v=8">
+    <link rel="stylesheet" href="styles.css?v=9">
   </head>
   <body>
     <main class="shell">
@@ -16,7 +16,7 @@
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v8 · 智能保持 PPT 版式 · PPTX/DOCX</p>
+          <p class="version">v9 · 译文预览 · 智能保持 PPT 版式</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -75,6 +75,7 @@
 
           <div class="actions">
             <button id="translateButton" class="primary" type="button" disabled>自动翻译</button>
+            <button id="previewButton" type="button" disabled>预览译文</button>
             <button id="downloadButton" type="button" disabled>导出翻译文件</button>
           </div>
 
@@ -130,7 +131,23 @@
       </section>
     </main>
 
+    <dialog class="preview-dialog" id="previewDialog">
+      <div class="preview-shell">
+        <header class="preview-head">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2>译文预览</h2>
+            <p id="previewMeta">按页面/部件预览最终写入文件的文字。</p>
+          </div>
+          <button class="icon-button" id="previewCloseButton" type="button" title="关闭预览" aria-label="关闭预览">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <div class="preview-body" id="previewBody"></div>
+      </div>
+    </dialog>
+
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=8" type="module"></script>
+    <script src="app.js?v=9" type="module"></script>
   </body>
 </html>

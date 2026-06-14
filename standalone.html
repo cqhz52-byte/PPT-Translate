@@ -397,6 +397,89 @@ td:first-child {
   border-left-color: var(--danger);
 }
 
+.preview-dialog {
+  width: min(1120px, calc(100vw - 28px));
+  max-height: min(860px, calc(100vh - 28px));
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.preview-dialog::backdrop {
+  background: rgba(15, 25, 23, 0.38);
+}
+
+.preview-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: inherit;
+}
+
+.preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.preview-head p:last-child {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.preview-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  overflow: auto;
+  background: #f9fbfa;
+}
+
+.preview-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.preview-card h3 {
+  margin: 0;
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.preview-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2);
+}
+
+.preview-item.pending {
+  border-left-color: var(--accent-2);
+  opacity: 0.78;
+}
+
+.preview-item p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.preview-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 @media (max-width: 860px) {
   .shell {
     padding: 14px;
@@ -441,6 +524,16 @@ td:first-child {
   td:first-child {
     width: auto;
   }
+
+  .preview-dialog {
+    width: calc(100vw - 14px);
+    max-height: calc(100vh - 14px);
+  }
+
+  .preview-head,
+  .preview-body {
+    padding: 14px;
+  }
 }
 
     </style>
@@ -452,7 +545,7 @@ td:first-child {
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v8 · 智能保持 PPT 版式 · PPTX/DOCX</p>
+          <p class="version">v9 · 译文预览 · 智能保持 PPT 版式</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -511,6 +604,7 @@ td:first-child {
 
           <div class="actions">
             <button id="translateButton" class="primary" type="button" disabled>自动翻译</button>
+            <button id="previewButton" type="button" disabled>预览译文</button>
             <button id="downloadButton" type="button" disabled>导出翻译文件</button>
           </div>
 
@@ -565,6 +659,22 @@ td:first-child {
         </section>
       </section>
     </main>
+
+    <dialog class="preview-dialog" id="previewDialog">
+      <div class="preview-shell">
+        <header class="preview-head">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2>译文预览</h2>
+            <p id="previewMeta">按页面/部件预览最终写入文件的文字。</p>
+          </div>
+          <button class="icon-button" id="previewCloseButton" type="button" title="关闭预览" aria-label="关闭预览">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <div class="preview-body" id="previewBody"></div>
+      </div>
+    </dialog>
   
 
     <script>
@@ -597,9 +707,14 @@ const els = {
   fileMeta: document.querySelector("#fileMeta"),
   segmentTable: document.querySelector("#segmentTable"),
   translateButton: document.querySelector("#translateButton"),
+  previewButton: document.querySelector("#previewButton"),
   downloadButton: document.querySelector("#downloadButton"),
   resetButton: document.querySelector("#resetButton"),
   installButton: document.querySelector("#installButton"),
+  previewDialog: document.querySelector("#previewDialog"),
+  previewCloseButton: document.querySelector("#previewCloseButton"),
+  previewBody: document.querySelector("#previewBody"),
+  previewMeta: document.querySelector("#previewMeta"),
   translationDirection: document.querySelector("#translationDirection"),
   pptLayoutMode: document.querySelector("#pptLayoutMode"),
   apiBase: document.querySelector("#apiBase"),
@@ -624,375 +739,80 @@ const serializer = new XMLSerializer();
 
 loadSettings();
 
-els.fileInput.addEventListener("change", async (event) => {
-  const [file] = event.target.files;
-  if (!file) return;
-  await loadOfficeFile(file);
-});
-
-els.translateButton.addEventListener("click", translateAll);
-els.downloadButton.addEventListener("click", downloadPresentation);
-els.resetButton.addEventListener("click", resetApp);
-
-[
-  els.translationDirection,
-  els.pptLayoutMode,
-  els.apiBase,
-  els.apiProxy,
-  els.modelName,
-  els.apiKey,
-].forEach((element) => {
-  element?.addEventListener("change", saveSettings);
-  element?.addEventListener("input", saveSettings);
-});
-
-async function loadOfficeFile(file) {
-  try {
-    if (/\.ppt$/i.test(file.name) && !/\.pptx$/i.test(file.name)) {
-      throw new Error("当前网页版只能可靠解析和回写 PPTX。请先用 PowerPoint/WPS 将 .ppt 另存为 .pptx。");
-    }
-
-    if (/\.doc$/i.test(file.name) && !/\.docx$/i.test(file.name)) {
-      throw new Error("当前网页版只能可靠解析和回写 DOCX。请先用 Word/WPS 将 .doc 另存为 .docx。");
-    }
-
-    if (!/\.(pptx|docx)$/i.test(file.name)) {
-      throw new Error("请选择 .pptx 或 .docx 文件。");
-    }
-
-    setBusy(true, "正在读取文件...");
-    state.file = file;
-    state.fileType = /\.docx$/i.test(file.name) ? "docx" : "pptx";
-    state.zip = await JSZip.loadAsync(file);
-    state.segments = [];
-    state.slideCount = 0;
-
-    if (state.fileType === "docx") {
-      await loadWordDocument();
-    } else {
-      await loadPresentation();
-    }
-
-    renderSegments();
-    updateStats();
-    els.fileMeta.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`;
-    setStatus(`已解析 ${getFileTypeName()}，共 ${state.segments.length} 段文字。默认使用 DeepSeek 翻译。`);
-    showToast(`${getFileTypeName()} 已载入，可以开始翻译或手动编辑。`);
-  } catch (error) {
-    showToast(error.message || "读取文件失败。", true);
-    resetApp(false);
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function loadPresentation() {
-    const slideFiles = Object.keys(state.zip.files)
-      .map((path) => ({ path, match: path.match(slidePathPattern) }))
-      .filter((item) => item.match)
-      .sort((a, b) => Number(a.match[1]) - Number(b.match[1]));
-
-    state.slideCount = slideFiles.length;
-
-    for (const item of slideFiles) {
-      const slideNumber = Number(item.match[1]);
-      const xmlText = await state.zip.file(item.path).async("text");
-      const doc = parser.parseFromString(xmlText, "application/xml");
-      const parseError = doc.querySelector("parsererror");
-      if (parseError) {
-        throw new Error(`第 ${slideNumber} 页 XML 解析失败。`);
-      }
-
-      const paragraphs = [...doc.getElementsByTagNameNS(DRAWING_NS, "p")];
-      paragraphs.forEach((paragraph, paragraphIndex) => {
-        const textNodes = [...paragraph.getElementsByTagNameNS(DRAWING_NS, "t")];
-        const original = textNodes.map((node) => node.textContent || "").join("").trim();
-        if (!original) return;
-        const layout = inspectPresentationLayout(paragraph, original);
-        state.segments.push({
-          id: `${slideNumber}-${paragraphIndex}`,
-          type: "pptx",
-          slideNumber,
-          locationLabel: String(slideNumber),
-          path: item.path,
-          paragraphIndex,
-          textNodeCount: textNodes.length,
-          layout,
-          original,
-          translation: "",
-        });
-      });
-    }
-}
-
-async function loadWordDocument() {
-  const wordFiles = Object.keys(state.zip.files)
-    .filter((path) => wordPathPattern.test(path))
-    .sort((a, b) => a.localeCompare(b));
-
-  if (!wordFiles.includes("word/document.xml")) {
-    throw new Error("未找到 Word 正文 document.xml，请确认这是有效的 DOCX 文件。");
-  }
-
-  state.slideCount = wordFiles.length;
-
-  for (const path of wordFiles) {
-    const xmlText = await state.zip.file(path).async("text");
-    const doc = parser.parseFromString(xmlText, "application/xml");
-    const parseError = doc.querySelector("parsererror");
-    if (parseError) {
-      throw new Error(`${path} XML 解析失败。`);
-    }
-
-    const partLabel = getWordPartLabel(path);
-    const paragraphs = [...doc.getElementsByTagNameNS(WORD_NS, "p")];
-    paragraphs.forEach((paragraph, paragraphIndex) => {
-      const textNodes = [...paragraph.getElementsByTagNameNS(WORD_NS, "t")];
-      const original = textNodes.map((node) => node.textContent || "").join("").trim();
-      if (!original) return;
-
-      state.segments.push({
-        id: `${path}-${paragraphIndex}`,
-        type: "docx",
-        slideNumber: partLabel,
-        locationLabel: partLabel,
-        path,
-        paragraphIndex,
-        textNodeCount: textNodes.length,
-        original,
-        translation: "",
-      });
-    });
-  }
-}
-
-function renderSegments() {
-  if (!state.segments.length) {
-    els.segmentTable.innerHTML = `
-      <tr class="empty-row">
-        <td colspan="3">
-          <div class="empty-state">
-            <strong>未发现可翻译文字</strong>
-            <span>请确认文件中包含普通文本框文字。</span>
-          </div>
-        </td>
-      </tr>
-    `;
-    return;
-  }
-
-  const fragment = document.createDocumentFragment();
-  state.segments.forEach((segment, index) => {
-    const row = document.createElement("tr");
-
-    const slideCell = document.createElement("td");
-    slideCell.textContent = String(segment.locationLabel || segment.slideNumber);
-
-    const sourceCell = document.createElement("td");
-    const source = document.createElement("div");
-    source.className = "source-text";
-    source.textContent = segment.original;
-    sourceCell.append(source);
-
-    const targetCell = document.createElement("td");
-    const textarea = document.createElement("textarea");
-    textarea.value = segment.translation;
-    textarea.placeholder = "输入译文";
-    textarea.dataset.index = String(index);
-    textarea.addEventListener("input", () => {
-      state.segments[Number(textarea.dataset.index)].translation = textarea.value;
-      updateStats();
-    });
-    targetCell.append(textarea);
-
-    row.append(slideCell, sourceCell, targetCell);
-    fragment.append(row);
-  });
-
-  els.segmentTable.replaceChildren(fragment);
-}
-
-async function translateAll() {
-  const apiKey = els.apiKey.value.trim();
-  const apiBase = els.apiBase.value.trim().replace(/\/$/, "");
-  const apiProxy = els.apiProxy.value.trim() || "./api/translate";
-  const model = els.modelName.value.trim();
-  const direction = getDirectionConfig(els.translationDirection.value);
-
-  if (!apiKey || !apiBase || !model) {
-    showToast("请先填写接口地址、模型和 API Key。", true);
-    return;
-  }
-
-  try {
-    setBusy(true, "正在翻译...");
-    const untranslated = state.segments.filter((segment) => !segment.translation.trim());
-
-    for (let index = 0; index < untranslated.length; index += 1) {
-      const segment = untranslated[index];
-      setProgress(index / untranslated.length);
-      setStatus(`正在翻译 ${segment.locationLabel || segment.slideNumber}：${index + 1}/${untranslated.length}`);
-      segment.translation = await translateText({
-        apiBase,
-        apiProxy,
-        apiKey,
-        model,
-        direction,
-        text: segment.original,
-      });
-      updateTextarea(segment);
-      updateStats();
-    }
-
-    setProgress(1);
-    setStatus("翻译完成，请检查译文后导出。");
-    showToast("自动翻译完成。");
-  } catch (error) {
-    showToast(error.message || "翻译失败。", true);
-    setStatus("翻译中断，请检查接口配置或网络连接。");
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function translateText({ apiBase, apiProxy, apiKey, model, direction, text }) {
-  const response = await fetch(apiProxy, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      apiBase,
-      apiKey,
-      model,
-      instruction: direction.instruction,
-      text,
-    }),
-  });
-
-  if (!response.ok) {
-    const detail = await response.json().catch(() => null);
-    throw new Error(detail?.error || `接口返回 ${response.status}`);
-  }
-
-  const data = await response.json();
-  return normalizeTranslation(data.translation || "", text);
-}
-
-async function downloadPresentation() {
-  if (!state.zip || !state.file) return;
-
-  try {
-    setBusy(true, `正在生成 ${getFileTypeName()}...`);
-    const grouped = groupByPath(state.segments);
-
-    for (const [path, segments] of grouped.entries()) {
-      const xmlText = await state.zip.file(path).async("text");
-      const doc = parser.parseFromString(xmlText, "application/xml");
-
-      if (state.fileType === "docx") {
-        writeWordSegments(doc, segments);
-      } else {
-        writePresentationSegments(doc, segments);
-      }
-
-      state.zip.file(path, serializer.serializeToString(doc));
-    }
-
-    const blob = await state.zip.generateAsync({
-      type: "blob",
-      mimeType:
-        state.fileType === "docx"
-          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          : "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    });
-
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = buildOutputName(state.file.name);
-    document.body.append(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    showToast(`已生成翻译版 ${getFileTypeName()}。`);
-  } catch (error) {
-    showToast(error.message || "导出失败。", true);
-  } finally {
-    setBusy(false);
-  }
-}
-
-function groupByPath(segments) {
-  return segments.reduce((map, segment) => {
-    if (!map.has(segment.path)) {
-      map.set(segment.path, []);
-    }
-    map.get(segment.path).push(segment);
-    return map;
-  }, new Map());
-}
-
-function writePresentationSegments(doc, segments) {
-  const paragraphs = [...doc.getElementsByTagNameNS(DRAWING_NS, "p")];
-
-  segments.forEach((segment) => {
-    const paragraph = paragraphs[segment.paragraphIndex];
-    if (!paragraph || !segment.translation.trim()) return;
-
-    const textNodes = [...paragraph.getElementsByTagNameNS(DRAWING_NS, "t")];
-    if (!textNodes.length) return;
-
-    textNodes[0].textContent = segment.translation.trim();
-    normalizePresentationRunStyle(textNodes[0], segment.original, segment.translation);
-    applyPresentationLayout(paragraph, segment);
-    clearRemainingTextNodes(textNodes);
-  });
-}
-
-function writeWordSegments(doc, segments) {
-  const paragraphs = [...doc.getElementsByTagNameNS(WORD_NS, "p")];
-
-  segments.forEach((segment) => {
-    const paragraph = paragraphs[segment.paragraphIndex];
-    if (!paragraph || !segment.translation.trim()) return;
-
-    const textNodes = [...paragraph.getElementsByTagNameNS(WORD_NS, "t")];
-    if (!textNodes.length) return;
-
-    textNodes[0].textContent = segment.translation.trim();
-    normalizeWordRunStyle(textNodes[0], segment.original, segment.translation);
-    clearRemainingTextNodes(textNodes);
-  });
-}
-
-function clearRemainingTextNodes(textNodes) {
-  for (let index = 1; index < textNodes.length; index += 1) {
-    textNodes[index].textContent = "";
-  }
-}
-
-function updateTextarea(segment) {
-  const index = state.segments.indexOf(segment);
-  const textarea = els.segmentTable.querySelector(`textarea[data-index="${index}"]`);
-  if (textarea) textarea.value = segment.translation;
-}
-
-function updateStats() {
-  const translated = state.segments.filter((segment) => segment.translation.trim()).length;
-  els.slideCount.textContent = String(state.slideCount);
-  els.segmentCount.textContent = String(state.segments.length);
-  els.translatedCount.textContent = String(translated);
-  els.translateButton.disabled = !state.segments.length;
-  els.downloadButton.disabled = !state.segments.length;
-  setProgress(state.segments.length ? translated / state.segments.length : 0);
-}
-
 function setBusy(isBusy, message = "") {
   els.translateButton.disabled = isBusy || !state.segments.length;
+  els.previewButton.disabled = isBusy || !state.segments.length;
   els.downloadButton.disabled = isBusy || !state.segments.length;
   els.fileInput.disabled = isBusy;
   if (message) setStatus(message);
+}
+
+function openPreview() {
+  renderPreview();
+  if (typeof els.previewDialog.showModal === "function") {
+    els.previewDialog.showModal();
+  } else {
+    els.previewDialog.setAttribute("open", "");
+  }
+}
+
+function closePreview() {
+  els.previewDialog.close();
+}
+
+function renderPreview() {
+  const translated = state.segments.filter((segment) => segment.translation.trim()).length;
+  els.previewMeta.textContent = `${getFileTypeName()} · ${state.segments.length} 段文字 · ${translated} 段已有译文`;
+  els.previewBody.replaceChildren();
+
+  if (!state.segments.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "还没有可预览的内容。";
+    els.previewBody.append(empty);
+    return;
+  }
+
+  const groups = groupSegmentsForPreview();
+  groups.forEach((group) => {
+    const section = document.createElement("section");
+    section.className = "preview-card";
+
+    const title = document.createElement("h3");
+    title.textContent = group.label;
+    section.append(title);
+
+    group.segments.forEach((segment) => {
+      const item = document.createElement("article");
+      item.className = `preview-item${segment.translation.trim() ? "" : " pending"}`;
+
+      const text = document.createElement("p");
+      text.textContent = segment.translation.trim() || segment.original;
+
+      const meta = document.createElement("span");
+      meta.textContent = segment.translation.trim() ? "译文" : "未翻译，暂用原文";
+
+      item.append(text, meta);
+      section.append(item);
+    });
+
+    els.previewBody.append(section);
+  });
+}
+
+function groupSegmentsForPreview() {
+  const map = new Map();
+  state.segments.forEach((segment) => {
+    const key = `${segment.path}:${segment.locationLabel || segment.slideNumber}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        label: state.fileType === "pptx" ? `第 ${segment.locationLabel} 页` : segment.locationLabel,
+        segments: [],
+      });
+    }
+    map.get(key).segments.push(segment);
+  });
+  return [...map.values()];
 }
 
 function setStatus(message) {

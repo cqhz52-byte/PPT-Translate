@@ -12,9 +12,14 @@ const els = {
   fileMeta: document.querySelector("#fileMeta"),
   segmentTable: document.querySelector("#segmentTable"),
   translateButton: document.querySelector("#translateButton"),
+  previewButton: document.querySelector("#previewButton"),
   downloadButton: document.querySelector("#downloadButton"),
   resetButton: document.querySelector("#resetButton"),
   installButton: document.querySelector("#installButton"),
+  previewDialog: document.querySelector("#previewDialog"),
+  previewCloseButton: document.querySelector("#previewCloseButton"),
+  previewBody: document.querySelector("#previewBody"),
+  previewMeta: document.querySelector("#previewMeta"),
   translationDirection: document.querySelector("#translationDirection"),
   pptLayoutMode: document.querySelector("#pptLayoutMode"),
   apiBase: document.querySelector("#apiBase"),
@@ -40,7 +45,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=8").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=9").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -66,8 +71,13 @@ els.fileInput.addEventListener("change", async (event) => {
 });
 
 els.translateButton.addEventListener("click", translateAll);
+els.previewButton.addEventListener("click", openPreview);
 els.downloadButton.addEventListener("click", downloadPresentation);
 els.resetButton.addEventListener("click", resetApp);
+els.previewCloseButton.addEventListener("click", closePreview);
+els.previewDialog.addEventListener("click", (event) => {
+  if (event.target === els.previewDialog) closePreview();
+});
 
 [
   els.translationDirection,
@@ -419,15 +429,85 @@ function updateStats() {
   els.segmentCount.textContent = String(state.segments.length);
   els.translatedCount.textContent = String(translated);
   els.translateButton.disabled = !state.segments.length;
+  els.previewButton.disabled = !state.segments.length;
   els.downloadButton.disabled = !state.segments.length;
   setProgress(state.segments.length ? translated / state.segments.length : 0);
 }
 
 function setBusy(isBusy, message = "") {
   els.translateButton.disabled = isBusy || !state.segments.length;
+  els.previewButton.disabled = isBusy || !state.segments.length;
   els.downloadButton.disabled = isBusy || !state.segments.length;
   els.fileInput.disabled = isBusy;
   if (message) setStatus(message);
+}
+
+function openPreview() {
+  renderPreview();
+  if (typeof els.previewDialog.showModal === "function") {
+    els.previewDialog.showModal();
+  } else {
+    els.previewDialog.setAttribute("open", "");
+  }
+}
+
+function closePreview() {
+  els.previewDialog.close();
+}
+
+function renderPreview() {
+  const translated = state.segments.filter((segment) => segment.translation.trim()).length;
+  els.previewMeta.textContent = `${getFileTypeName()} · ${state.segments.length} 段文字 · ${translated} 段已有译文`;
+  els.previewBody.replaceChildren();
+
+  if (!state.segments.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "还没有可预览的内容。";
+    els.previewBody.append(empty);
+    return;
+  }
+
+  const groups = groupSegmentsForPreview();
+  groups.forEach((group) => {
+    const section = document.createElement("section");
+    section.className = "preview-card";
+
+    const title = document.createElement("h3");
+    title.textContent = group.label;
+    section.append(title);
+
+    group.segments.forEach((segment) => {
+      const item = document.createElement("article");
+      item.className = `preview-item${segment.translation.trim() ? "" : " pending"}`;
+
+      const text = document.createElement("p");
+      text.textContent = segment.translation.trim() || segment.original;
+
+      const meta = document.createElement("span");
+      meta.textContent = segment.translation.trim() ? "译文" : "未翻译，暂用原文";
+
+      item.append(text, meta);
+      section.append(item);
+    });
+
+    els.previewBody.append(section);
+  });
+}
+
+function groupSegmentsForPreview() {
+  const map = new Map();
+  state.segments.forEach((segment) => {
+    const key = `${segment.path}:${segment.locationLabel || segment.slideNumber}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        label: state.fileType === "pptx" ? `第 ${segment.locationLabel} 页` : segment.locationLabel,
+        segments: [],
+      });
+    }
+    map.get(key).segments.push(segment);
+  });
+  return [...map.values()];
 }
 
 function setStatus(message) {
