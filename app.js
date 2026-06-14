@@ -49,7 +49,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=15").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=16").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -474,6 +474,8 @@ function closePreview() {
 }
 
 function renderPreview() {
+  const previousScrollTop = els.previewBody.scrollTop;
+  const selectedIndex = els.previewBody.querySelector(".slide-text-box.selected")?.dataset.index || "";
   const translated = state.segments.filter((segment) => segment.translation.trim()).length;
   els.previewMeta.textContent = `${getFileTypeName()} · ${state.segments.length} 段文字 · ${translated} 段已有译文`;
   els.previewBody.replaceChildren();
@@ -504,6 +506,15 @@ function renderPreview() {
     }
 
     els.previewBody.append(section);
+  });
+
+  if (selectedIndex) {
+    const selectedBox = els.previewBody.querySelector(`.slide-text-box[data-index="${selectedIndex}"]`);
+    selectedBox?.classList.add("selected");
+  }
+  els.previewBody.scrollTop = previousScrollTop;
+  requestAnimationFrame(() => {
+    els.previewBody.scrollTop = previousScrollTop;
   });
 }
 
@@ -560,6 +571,7 @@ function createSlidePreview(segments) {
 
     box.addEventListener("pointerdown", () => selectPreviewBox(box));
     box.addEventListener("focus", () => selectPreviewBox(box));
+    attachPreviewMove(box, segment);
     box.append(text, tools, resizeHandle);
     slide.append(box);
   });
@@ -636,6 +648,49 @@ function selectPreviewBox(box) {
       if (item !== box) item.classList.remove("selected");
     });
   box.classList.add("selected");
+}
+
+function attachPreviewMove(box, segment) {
+  box.addEventListener("pointerdown", (event) => {
+    if (event.target.closest(".slide-box-tools") || event.target.closest(".slide-resize-handle")) return;
+
+    event.preventDefault();
+    selectPreviewBox(box);
+
+    const slide = box.closest(".slide-preview");
+    const slideRect = slide.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startLeft = box.offsetLeft;
+    const startTop = box.offsetTop;
+    const maxLeft = Math.max(0, slide.clientWidth - box.offsetWidth);
+    const maxTop = Math.max(0, slide.clientHeight - box.offsetHeight);
+    let didMove = false;
+
+    box.setPointerCapture(event.pointerId);
+    box.classList.add("moving");
+
+    const onMove = (moveEvent) => {
+      const left = Math.max(0, Math.min(maxLeft, startLeft + moveEvent.clientX - startX));
+      const top = Math.max(0, Math.min(maxTop, startTop + moveEvent.clientY - startY));
+      didMove = didMove || Math.abs(left - startLeft) > 1 || Math.abs(top - startTop) > 1;
+      box.style.left = `${(left / slideRect.width) * 100}%`;
+      box.style.top = `${(top / slideRect.height) * 100}%`;
+      updateSegmentBoundsFromPreview(segment, box, slideRect);
+    };
+
+    const onEnd = () => {
+      box.removeEventListener("pointermove", onMove);
+      box.removeEventListener("pointerup", onEnd);
+      box.removeEventListener("pointercancel", onEnd);
+      box.classList.remove("moving");
+      if (didMove) renderSegments();
+    };
+
+    box.addEventListener("pointermove", onMove);
+    box.addEventListener("pointerup", onEnd);
+    box.addEventListener("pointercancel", onEnd);
+  });
 }
 
 function attachPreviewResize(handle, box, segment) {
@@ -771,8 +826,10 @@ function applyPresentationBounds(paragraph, segment) {
   if (!bounds) return;
 
   const transform = getParagraphTransform(paragraph);
-  if (!transform?.extent) return;
+  if (!transform?.offset || !transform?.extent) return;
 
+  transform.offset.setAttribute("x", String(Math.max(0, Math.round(bounds.x))));
+  transform.offset.setAttribute("y", String(Math.max(0, Math.round(bounds.y))));
   transform.extent.setAttribute("cx", String(Math.max(1, Math.round(bounds.cx))));
   transform.extent.setAttribute("cy", String(Math.max(1, Math.round(bounds.cy))));
 }
@@ -1117,12 +1174,11 @@ function getSegmentBounds(segment) {
 }
 
 function updateSegmentBoundsFromPreview(segment, box, slideRect) {
-  const baseBounds = segment.layout?.bounds;
-  if (!baseBounds) return;
+  if (!segment.layout?.bounds) return;
 
   segment.overrides.bounds = {
-    x: baseBounds.x,
-    y: baseBounds.y,
+    x: Math.max(0, (box.offsetLeft / slideRect.width) * state.slideSize.cx),
+    y: Math.max(0, (box.offsetTop / slideRect.height) * state.slideSize.cy),
     cx: Math.max(1, (box.offsetWidth / slideRect.width) * state.slideSize.cx),
     cy: Math.max(1, (box.offsetHeight / slideRect.height) * state.slideSize.cy),
   };
