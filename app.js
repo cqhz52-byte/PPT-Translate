@@ -33,13 +33,14 @@ const wordPathPattern = /^word\/(?:document|header\d+|footer\d+|footnotes|endnot
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
+const SETTINGS_VERSION = 2;
 const parser = new DOMParser();
 const serializer = new XMLSerializer();
 
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=7").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=8").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -142,6 +143,7 @@ async function loadPresentation() {
         const textNodes = [...paragraph.getElementsByTagNameNS(DRAWING_NS, "t")];
         const original = textNodes.map((node) => node.textContent || "").join("").trim();
         if (!original) return;
+        const layout = inspectPresentationLayout(paragraph, original);
         state.segments.push({
           id: `${slideNumber}-${paragraphIndex}`,
           type: "pptx",
@@ -150,6 +152,7 @@ async function loadPresentation() {
           path: item.path,
           paragraphIndex,
           textNodeCount: textNodes.length,
+          layout,
           original,
           translation: "",
         });
@@ -377,7 +380,7 @@ function writePresentationSegments(doc, segments) {
 
     textNodes[0].textContent = segment.translation.trim();
     normalizePresentationRunStyle(textNodes[0], segment.original, segment.translation);
-    applyPresentationLayout(paragraph);
+    applyPresentationLayout(paragraph, segment);
     clearRemainingTextNodes(textNodes);
   });
 }
@@ -499,29 +502,46 @@ function normalizeWordRunStyle(textNode, source, translation) {
   }
 }
 
-function applyPresentationLayout(paragraph) {
+function applyPresentationLayout(paragraph, segment) {
   const textBody = paragraph.parentElement;
   if (!textBody) return;
 
   const bodyProperties = [...textBody.children].find((node) => node.localName === "bodyPr");
   if (!bodyProperties) return;
 
-  bodyProperties.setAttribute("wrap", "none");
+  const layout = segment.layout || {};
+  const shouldForceSingleLine = shouldUseSingleLine(segment);
 
   [...bodyProperties.children]
     .filter((node) => ["noAutofit", "spAutoFit", "normAutofit"].includes(node.localName))
     .forEach((node) => node.remove());
 
-  if (getPptLayoutMode() !== "compact-fit") {
-    const noAutofit = document.createElementNS(DRAWING_NS, "a:noAutofit");
-    bodyProperties.append(noAutofit);
+  if (shouldForceSingleLine) {
+    bodyProperties.setAttribute("wrap", "none");
+  } else if (layout.wrap && layout.wrap !== "none") {
+    bodyProperties.setAttribute("wrap", layout.wrap);
+  } else {
+    bodyProperties.removeAttribute("wrap");
+  }
+
+  if (getPptLayoutMode() === "compact-fit") {
+    const autoFit = document.createElementNS(DRAWING_NS, "a:normAutofit");
+    autoFit.setAttribute("fontScale", "88000");
+    autoFit.setAttribute("lnSpcReduction", "12000");
+    bodyProperties.append(autoFit);
     return;
   }
 
-  const autoFit = document.createElementNS(DRAWING_NS, "a:normAutofit");
-  autoFit.setAttribute("fontScale", "88000");
-  autoFit.setAttribute("lnSpcReduction", "12000");
-  bodyProperties.append(autoFit);
+  if (layout.autofit === "normAutofit") {
+    const autoFit = document.createElementNS(DRAWING_NS, "a:normAutofit");
+    Object.entries(layout.autofitAttrs || {}).forEach(([key, value]) => autoFit.setAttribute(key, value));
+    bodyProperties.append(autoFit);
+  } else if (layout.autofit === "spAutoFit") {
+    bodyProperties.append(document.createElementNS(DRAWING_NS, "a:spAutoFit"));
+  } else {
+    const noAutofit = document.createElementNS(DRAWING_NS, "a:noAutofit");
+    bodyProperties.append(noAutofit);
+  }
 }
 
 function ensureChild(parent, localName) {
@@ -572,7 +592,56 @@ function getPresentationLengthScale(source, translation) {
 }
 
 function getPptLayoutMode() {
-  return els.pptLayoutMode?.value || "keep-size";
+  return els.pptLayoutMode?.value || "smart";
+}
+
+function inspectPresentationLayout(paragraph, original) {
+  const textBody = paragraph.parentElement;
+  const bodyProperties = [...(textBody?.children || [])].find((node) => node.localName === "bodyPr");
+  const autofit = [...(bodyProperties?.children || [])].find((node) =>
+    ["noAutofit", "spAutoFit", "normAutofit"].includes(node.localName)
+  );
+  const lines = original.split(/\r\n|\r|\n/).filter((line) => line.trim()).length || 1;
+
+  return {
+    wrap: bodyProperties?.getAttribute("wrap") || "",
+    autofit: autofit?.localName || "",
+    autofitAttrs: autofit ? Object.fromEntries([...autofit.attributes].map((attr) => [attr.name, attr.value])) : {},
+    hasManualBreaks: lines > 1,
+    textLength: [...original].length,
+    textNodeCount: [...paragraph.getElementsByTagNameNS(DRAWING_NS, "t")].length,
+    textBodyParagraphCount: countTextBodyParagraphs(textBody),
+  };
+}
+
+function shouldUseSingleLine(segment) {
+  const mode = getPptLayoutMode();
+  if (mode === "compact-fit") return false;
+  if (mode === "keep-size") return true;
+
+  const layout = segment.layout || {};
+  if (layout.hasManualBreaks) return false;
+  if (layout.textBodyParagraphCount > 1) return false;
+  if (layout.wrap && layout.wrap !== "none") return false;
+  if (layout.autofit === "normAutofit" || layout.autofit === "spAutoFit") return false;
+
+  const textLength = layout.textLength || [...segment.original].length;
+  const translationLength = [...(segment.translation || "")].length;
+  const looksLikeShortLabel = textLength <= 28 && translationLength <= 52;
+  const looksLikeLongSentence = /[。；;.!?？]/.test(segment.original) || textLength > 36 || translationLength > 72;
+
+  return looksLikeShortLabel && !looksLikeLongSentence;
+}
+
+function countTextBodyParagraphs(textBody) {
+  if (!textBody) return 1;
+  return [...textBody.getElementsByTagNameNS(DRAWING_NS, "p")].filter((paragraph) => {
+    const text = [...paragraph.getElementsByTagNameNS(DRAWING_NS, "t")]
+      .map((node) => node.textContent || "")
+      .join("")
+      .trim();
+    return Boolean(text);
+  }).length;
 }
 
 function getFileTypeName() {
@@ -592,6 +661,9 @@ function getWordPartLabel(path) {
 function loadSettings() {
   try {
     const settings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+    if (settings.settingsVersion !== SETTINGS_VERSION && settings.pptLayoutMode === "keep-size") {
+      settings.pptLayoutMode = "smart";
+    }
     setElementValue(els.translationDirection, settings.translationDirection);
     setElementValue(els.pptLayoutMode, settings.pptLayoutMode);
     setElementValue(els.apiBase, settings.apiBase);
@@ -605,6 +677,7 @@ function loadSettings() {
 
 function saveSettings() {
   const settings = {
+    settingsVersion: SETTINGS_VERSION,
     translationDirection: els.translationDirection?.value || "",
     pptLayoutMode: els.pptLayoutMode?.value || "",
     apiBase: els.apiBase?.value || "",

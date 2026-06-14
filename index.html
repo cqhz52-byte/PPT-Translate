@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon.svg">
-    <link rel="stylesheet" href="styles.css?v=7">
+    <link rel="stylesheet" href="styles.css?v=8">
   </head>
   <body>
     <main class="shell">
@@ -16,7 +16,7 @@
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v7 · 记住 DeepSeek · PPTX/DOCX</p>
+          <p class="version">v8 · 智能保持 PPT 版式 · PPTX/DOCX</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -50,7 +50,8 @@
             <label>
               PPT 版式策略
               <select id="pptLayoutMode">
-                <option value="keep-size" selected>保持字号，单行优先</option>
+                <option value="smart" selected>智能保持原版式</option>
+                <option value="keep-size">短文本单行优先</option>
                 <option value="compact-fit">紧凑适配，轻微缩小</option>
               </select>
             </label>
@@ -130,6 +131,6 @@
     </main>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=7" type="module"></script>
+    <script src="app.js?v=8" type="module"></script>
   </body>
 </html>
