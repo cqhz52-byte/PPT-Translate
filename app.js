@@ -58,7 +58,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=23").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=24").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -703,24 +703,46 @@ function renderPreview() {
 }
 
 async function downloadPdfTranslation() {
+  setProgress(0.01);
+  setStatus("PDF 导出准备中，请稍等...");
+  await waitForUiFrame();
+
+  setProgress(0.06);
+  setStatus("正在加载 PDF 导出组件和中文字体，首次使用可能需要更久...");
+  await waitForUiFrame();
   const { PDFDocument, rgb, fontkit, fontBytes } = await loadPdfExportTools();
   if (!state.pdfBytes) throw new Error("缺少原 PDF 数据，请重新上传 PDF。");
 
+  setProgress(0.18);
+  setStatus("正在打开原始 PDF，并保留图片、表格和页面结构...");
+  await waitForUiFrame();
   const pdfDoc = await PDFDocument.load(state.pdfBytes);
   pdfDoc.registerFontkit(fontkit);
   pdfDoc.setTitle(`${state.file.name} translated`);
 
+  setProgress(0.28);
+  setStatus("正在嵌入译文字体...");
+  await waitForUiFrame();
   const font = await pdfDoc.embedFont(fontBytes, { subset: true });
   const pages = pdfDoc.getPages();
+  const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.translation.trim() && segment.layout?.bounds);
 
-  state.segments
-    .filter((segment) => segment.type === "pdf" && segment.translation.trim() && segment.layout?.bounds)
-    .forEach((segment) => {
-      const page = pages[Number(segment.slideNumber) - 1];
-      if (!page) return;
-      drawPdfOverlayTranslation(page, segment, font, rgb);
-    });
+  for (let index = 0; index < translatedSegments.length; index += 1) {
+    const segment = translatedSegments[index];
+    const page = pages[Number(segment.slideNumber) - 1];
+    if (page) drawPdfOverlayTranslation(page, segment, font, rgb);
 
+    if (index % 12 === 0 || index === translatedSegments.length - 1) {
+      const ratio = translatedSegments.length ? (index + 1) / translatedSegments.length : 1;
+      setProgress(0.32 + ratio * 0.5);
+      setStatus(`正在回写 PDF 译文：${index + 1}/${translatedSegments.length} 段，请勿关闭页面。`);
+      await waitForUiFrame();
+    }
+  }
+
+  setProgress(0.9);
+  setStatus("正在保存翻译版 PDF，文件较大时可能需要几十秒...");
+  await waitForUiFrame();
   const pdfBytes = await pdfDoc.save();
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
@@ -731,6 +753,8 @@ async function downloadPdfTranslation() {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+  setProgress(1);
+  setStatus("PDF 导出完成。");
 }
 
 function drawPdfOverlayTranslation(page, segment, font, rgb) {
@@ -1109,6 +1133,12 @@ function setStatus(message) {
 function setProgress(value) {
   const percent = Math.max(0, Math.min(100, Math.round(value * 100)));
   els.progressFill.style.width = `${percent}%`;
+}
+
+function waitForUiFrame() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+  });
 }
 
 function resetApp(clearInput = true) {
