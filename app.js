@@ -37,6 +37,7 @@ const els = {
   segmentCount: document.querySelector("#segmentCount"),
   translatedCount: document.querySelector("#translatedCount"),
   statusText: document.querySelector("#statusText"),
+  statusVisual: document.querySelector("#statusVisual"),
   progressFill: document.querySelector("#progressFill"),
 };
 
@@ -59,7 +60,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=29").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=30").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -868,6 +869,10 @@ function setBusy(isBusy, message = "") {
     els.previewDownloadButton.disabled = isBusy || !state.segments.length;
   }
   els.fileInput.disabled = isBusy;
+  document.body.classList.toggle("is-busy", isBusy);
+  if (els.statusVisual) {
+    els.statusVisual.classList.toggle("active", isBusy);
+  }
   if (message) setStatus(message);
 }
 
@@ -1437,6 +1442,8 @@ function setStatus(message) {
 function setProgress(value) {
   const percent = Math.max(0, Math.min(100, Math.round(value * 100)));
   els.progressFill.style.width = `${percent}%`;
+  els.progressFill.style.setProperty("--progress-percent", `${percent}%`);
+  els.statusVisual?.style.setProperty("--progress-deg", `${Math.round(percent * 3.6)}deg`);
 }
 
 function waitForUiFrame() {

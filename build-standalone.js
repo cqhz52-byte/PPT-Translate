@@ -6,8 +6,10 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
 const css = read("styles.css");
 const jszip = read("vendor/jszip.min.js");
+const logo = fs.readFileSync(path.join(root, "assets", "curaway-logo.png")).toString("base64");
 const sourceHtml = read("index.html");
 const body = sourceHtml.match(/<body>([\s\S]*?)<\/body>/)?.[1]
+  .replace(/src="assets\/curaway-logo\.png"/g, `src="data:image/png;base64,${logo}"`)
   .replace(/\s*<script src="vendor\/jszip\.min\.js"><\/script>/, "")
   .replace(/\s*<script src="app\.js\?v=\d+" type="module"><\/script>/, "");
 const app = read("app.js")

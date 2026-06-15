@@ -69,6 +69,21 @@ button:disabled {
   margin-bottom: 18px;
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+}
+
+.brand-logo {
+  display: block;
+  width: clamp(170px, 21vw, 260px);
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 12px 22px rgba(23, 35, 33, 0.1));
+}
+
 .eyebrow {
   margin: 0 0 4px;
   color: var(--accent-2);
@@ -307,9 +322,15 @@ textarea:focus {
 
 .panel-head {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
+  align-items: center;
   padding: 18px;
   border-bottom: 1px solid var(--line);
+}
+
+.status-copy {
+  min-width: 0;
 }
 
 .panel-head p {
@@ -317,7 +338,59 @@ textarea:focus {
   color: var(--muted);
 }
 
+.status-visual {
+  --progress-deg: 0deg;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background:
+    conic-gradient(var(--accent-2) var(--progress-deg), rgba(22, 90, 114, 0.15) 0),
+    radial-gradient(circle at 50% 50%, #fff 58%, transparent 60%);
+  box-shadow: 0 14px 26px rgba(22, 90, 114, 0.14);
+}
+
+.status-visual::before {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  border: 2px solid rgba(22, 90, 114, 0.18);
+}
+
+.status-ring {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(22, 90, 114, 0.18);
+  border-top-color: var(--accent);
+}
+
+.status-dot {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent-2);
+  box-shadow: 0 0 0 6px rgba(180, 83, 42, 0.12);
+}
+
+.status-visual.active .status-ring,
+.is-busy .status-ring {
+  animation: status-spin 900ms linear infinite;
+}
+
+.status-visual.active .status-dot,
+.is-busy .status-dot {
+  animation: status-pulse 1100ms ease-in-out infinite;
+}
+
 .progress {
+  grid-column: 1 / -1;
   height: 8px;
   border-radius: 999px;
   background: var(--surface-2);
@@ -330,6 +403,42 @@ textarea:focus {
   height: 100%;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
   transition: width 180ms ease;
+}
+
+.is-busy .progress span {
+  background: linear-gradient(90deg, var(--accent), #f08a24, var(--accent));
+  background-size: 200% 100%;
+  animation: progress-glow 1200ms linear infinite;
+}
+
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    transform: scale(0.88);
+    opacity: 0.72;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+}
+
+@keyframes progress-glow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
 }
 
 .table-wrap {
@@ -721,6 +830,23 @@ td:first-child {
 @media (max-width: 860px) {
   .shell {
     padding: 14px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+  }
+
+  .brand {
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .brand-logo {
+    width: min(42vw, 180px);
+  }
+
+  h1 {
+    font-size: 25px;
   }
 
   .workspace {

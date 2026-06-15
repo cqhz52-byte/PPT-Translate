@@ -8,15 +8,18 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon.svg">
-    <link rel="stylesheet" href="styles.css?v=29">
+    <link rel="stylesheet" href="styles.css?v=30">
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">PWA</p>
-          <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v29 · PDF 表格线重绘</p>
+        <div class="brand">
+          <img class="brand-logo" src="assets/curaway-logo.png" alt="Curaway">
+          <div>
+            <p class="eyebrow">PWA</p>
+            <h1>DeepSeek 文档翻译工具</h1>
+            <p class="version">v30 · Curaway 品牌动效</p>
+          </div>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -96,9 +99,13 @@
 
         <section class="panel">
           <div class="panel-head">
-            <div>
+            <div class="status-copy">
               <h2>文本清单</h2>
-              <p id="statusText">请先选择一个 PPTX 或 DOCX 文件。</p>
+              <p id="statusText">请先选择一个 PPTX、DOCX 或 PDF 文件。</p>
+            </div>
+            <div class="status-visual" id="statusVisual" aria-hidden="true">
+              <span class="status-ring"></span>
+              <span class="status-dot"></span>
             </div>
             <div class="progress" aria-hidden="true">
               <span id="progressFill"></span>
@@ -119,7 +126,7 @@
                   <td colspan="3">
                     <div class="empty-state">
                       <strong>还没有载入内容</strong>
-                      <span>上传 PPTX 或 DOCX 后，可逐段翻译、校对并导出新文件。</span>
+                      <span>上传 PPTX、DOCX 或 PDF 后，可逐段翻译、校对并导出新文件。</span>
                     </div>
                   </td>
                 </tr>
@@ -150,6 +157,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=29" type="module"></script>
+    <script src="app.js?v=30" type="module"></script>
   </body>
 </html>
