@@ -851,20 +851,51 @@ td:first-child {
   }
 
   .topbar {
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px 12px;
+    align-items: center;
+    margin-bottom: 14px;
   }
 
   .brand {
-    align-items: flex-start;
-    gap: 12px;
+    display: contents;
+  }
+
+  .brand > div {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-width: 0;
+    text-align: center;
   }
 
   .brand-logo {
-    width: min(42vw, 180px);
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+    width: min(34vw, 128px);
+  }
+
+  .topbar-actions {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+    gap: 6px;
+  }
+
+  .topbar-actions .icon-button {
+    width: 40px;
+    min-height: 40px;
   }
 
   h1 {
-    font-size: 25px;
+    font-size: 24px;
+    white-space: nowrap;
+  }
+
+  .version {
+    margin-top: 5px;
+    font-size: 12px;
   }
 
   .workspace {
