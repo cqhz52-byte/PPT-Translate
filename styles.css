@@ -126,6 +126,24 @@ h2 {
   font-weight: 800;
 }
 
+.install-button {
+  color: var(--accent);
+}
+
+.install-icon {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.install-button:hover .install-icon {
+  transform: translateY(1px);
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);

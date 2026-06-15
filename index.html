@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#165a72">
-    <title>DeepSeek 文档翻译工具</title>
+    <title>Curaway 文档翻译工具</title>
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon.svg">
-    <link rel="stylesheet" href="styles.css?v=30">
+    <link rel="stylesheet" href="styles.css?v=31">
   </head>
   <body>
     <main class="shell">
@@ -16,14 +16,18 @@
         <div class="brand">
           <img class="brand-logo" src="assets/curaway-logo.png" alt="Curaway">
           <div>
-            <p class="eyebrow">PWA</p>
-            <h1>DeepSeek 文档翻译工具</h1>
-            <p class="version">v30 · Curaway 品牌动效</p>
+            <h1>文档翻译工具</h1>
+            <p class="version">v31 · Curaway 品牌动效</p>
           </div>
         </div>
         <div class="topbar-actions">
-          <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
-            <span aria-hidden="true">⇩</span>
+          <button class="icon-button install-button" id="installButton" type="button" hidden title="安装到桌面" aria-label="安装到桌面">
+            <svg class="install-icon" aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"></path>
+              <path d="M12 7v7"></path>
+              <path d="m9 11 3 3 3-3"></path>
+              <path d="M10 18h4"></path>
+            </svg>
           </button>
           <button class="icon-button" id="resetButton" type="button" title="清空当前文件" aria-label="清空当前文件">
             <span aria-hidden="true">↺</span>
@@ -157,6 +161,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=30" type="module"></script>
+    <script src="app.js?v=31" type="module"></script>
   </body>
 </html>

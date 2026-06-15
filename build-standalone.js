@@ -32,7 +32,7 @@ const html = `<!doctype html>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#165a72">
-    <title>DeepSeek 文档翻译工具 - 单网页版</title>
+    <title>Curaway 文档翻译工具 - 单网页版</title>
     <style>
 ${css}
     </style>
