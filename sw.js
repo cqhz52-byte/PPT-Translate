@@ -1,11 +1,11 @@
-const CACHE_NAME = "ppt-translator-pwa-v21";
+const CACHE_NAME = "ppt-translator-pwa-v23";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
-  "./styles.css?v=21",
+  "./styles.css?v=23",
   "./app.js",
-  "./app.js?v=21",
+  "./app.js?v=23",
   "./manifest.webmanifest",
   "./vendor/jszip.min.js",
   "./icons/icon.svg",
@@ -30,6 +30,19 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
+  if (shouldUseNetworkFirst(event.request)) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
@@ -41,3 +54,7 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
+function shouldUseNetworkFirst(request) {
+  return request.mode === "navigate" || ["document", "script", "style"].includes(request.destination);
+}

@@ -83,6 +83,8 @@ async function handleTranslate(req, res) {
             instruction,
             "Keep numbers, units, product names, formulas, punctuation intent, dates, and years exactly accurate.",
             "For document layout safety, keep the translation compact and close to the source length.",
+            "If the source is short, fragmented, or appears to be a table cell, translate it literally and compactly.",
+            "Never say you cannot translate, never ask for source text, and never return apology or explanation text.",
             "For titles, section labels, table-of-contents entries, and short phrases, use short noun phrases instead of full sentences.",
             "Do not add line breaks unless the source text clearly contains line breaks.",
             "For Chinese-to-English, prefer concise business wording over long explanatory sentences.",
