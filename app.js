@@ -7,6 +7,7 @@ const state = {
   slideSize: { cx: 12192000, cy: 6858000 },
   slideVisuals: new Map(),
   pdfPageSizes: new Map(),
+  pdfTableCells: new Map(),
   pdfBytes: null,
   installPrompt: null,
 };
@@ -58,7 +59,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=28").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=29").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -153,6 +154,7 @@ async function loadOfficeFile(file) {
     state.slideSize = { cx: 12192000, cy: 6858000 };
     state.slideVisuals = new Map();
     state.pdfPageSizes = new Map();
+    state.pdfTableCells = new Map();
     state.pdfBytes = null;
 
     if (state.fileType === "pdf") {
@@ -239,6 +241,7 @@ async function loadPdfDocument(file) {
     });
     const content = await page.getTextContent();
     const tableCells = await extractPdfTableCells(page, pdfjs, viewport).catch(() => []);
+    state.pdfTableCells.set(`pdf/page-${pageNumber}`, tableCells);
     const lines = extractPdfLineSegments(content.items, viewport.width || 595.28);
 
     lines.forEach((line, index) => {
@@ -974,6 +977,14 @@ async function downloadPdfTranslation() {
   setProgress(0.9);
   setStatus("正在保存翻译版 PDF，文件较大时可能需要几十秒...");
   await waitForUiFrame();
+  setProgress(0.86);
+  setStatus("正在重新绘制 PDF 表格线，修复文字覆盖造成的断线...");
+  await waitForUiFrame();
+  pages.forEach((page, index) => {
+    const cells = state.pdfTableCells.get(`pdf/page-${index + 1}`) || [];
+    drawPdfTableCellBorders(page, cells, rgb);
+  });
+
   const pdfBytes = await pdfDoc.save();
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
@@ -1034,6 +1045,37 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
       color: rgb(0.06, 0.08, 0.09),
     });
     y -= lineHeight;
+  });
+}
+
+function drawPdfTableCellBorders(page, cells, rgb) {
+  if (!cells.length) return;
+
+  const lines = new Map();
+  cells.forEach((cell) => {
+    addPdfBorderLine(lines, cell.x, cell.y, cell.x2, cell.y);
+    addPdfBorderLine(lines, cell.x, cell.y2, cell.x2, cell.y2);
+    addPdfBorderLine(lines, cell.x, cell.y, cell.x, cell.y2);
+    addPdfBorderLine(lines, cell.x2, cell.y, cell.x2, cell.y2);
+  });
+
+  lines.forEach((line) => {
+    page.drawLine({
+      start: { x: line.x1, y: line.y1 },
+      end: { x: line.x2, y: line.y2 },
+      thickness: 0.45,
+      color: rgb(0, 0, 0),
+    });
+  });
+}
+
+function addPdfBorderLine(lines, x1, y1, x2, y2) {
+  const rounded = [x1, y1, x2, y2].map((value) => Math.round(value * 2) / 2);
+  lines.set(rounded.join(":"), {
+    x1: rounded[0],
+    y1: rounded[1],
+    x2: rounded[2],
+    y2: rounded[3],
   });
 }
 
@@ -1411,6 +1453,7 @@ function resetApp(clearInput = true) {
   state.slideCount = 0;
   state.slideVisuals = new Map();
   state.pdfPageSizes = new Map();
+  state.pdfTableCells = new Map();
   if (clearInput) els.fileInput.value = "";
   els.fileMeta.textContent = "支持 PPTX / DOCX / PDF；旧版 PPT/DOC 请先另存";
   renderSegments();
