@@ -810,7 +810,7 @@ td:first-child {
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v27 · PDF 表格线保护</p>
+          <p class="version">v28 · PDF 表格线识别</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -1180,9 +1180,11 @@ async function loadPdfDocument(file) {
       height: viewport.height || 841.89,
     });
     const content = await page.getTextContent();
+    const tableCells = await extractPdfTableCells(page, pdfjs, viewport).catch(() => []);
     const lines = extractPdfLineSegments(content.items, viewport.width || 595.28);
 
     lines.forEach((line, index) => {
+      const tableCell = findPdfTableCell(line.bounds, tableCells);
       state.segments.push({
         id: `pdf-${pageNumber}-${index}`,
         type: "pdf",
@@ -1194,8 +1196,11 @@ async function loadPdfDocument(file) {
         layout: {
           bounds: line.bounds,
           fontSize: line.fontSize,
-          availableWidth: line.availableWidth,
-          rowSegmentCount: line.rowSegmentCount,
+          availableWidth: tableCell ? Math.max(line.availableWidth, tableCell.width - 4) : line.availableWidth,
+          availableHeight: tableCell ? Math.max(line.availableHeight, tableCell.height - 4) : line.availableHeight,
+          rowSegmentCount: tableCell ? Math.max(2, line.rowSegmentCount) : line.rowSegmentCount,
+          tableCell,
+          cellAlign: tableCell ? inferPdfCellAlign(line.bounds, tableCell, line.text) : "",
         },
         overrides: createSegmentOverrides(),
         original: line.text,
@@ -1217,6 +1222,205 @@ async function loadPdfJs() {
 
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
   return window.pdfjsLib;
+}
+
+async function extractPdfTableCells(page, pdfjs, viewport) {
+  const operatorList = await page.getOperatorList();
+  const segments = extractPdfVectorSegments(operatorList, pdfjs, viewport);
+  return buildPdfTableCellsFromLines(segments, viewport.width || 595.28, viewport.height || 841.89);
+}
+
+function extractPdfVectorSegments(operatorList, pdfjs, viewport) {
+  const OPS = pdfjs.OPS || {};
+  const fnArray = operatorList.fnArray || [];
+  const argsArray = operatorList.argsArray || [];
+  const matrixStack = [[1, 0, 0, 1, 0, 0]];
+  const segments = [];
+
+  const op = {
+    save: OPS.save ?? 10,
+    restore: OPS.restore ?? 11,
+    transform: OPS.transform ?? 12,
+    constructPath: OPS.constructPath ?? 91,
+    moveTo: OPS.moveTo ?? 13,
+    lineTo: OPS.lineTo ?? 14,
+    curveTo: OPS.curveTo ?? 15,
+    curveTo2: OPS.curveTo2 ?? 16,
+    curveTo3: OPS.curveTo3 ?? 17,
+    closePath: OPS.closePath ?? 18,
+    rectangle: OPS.rectangle ?? 19,
+  };
+
+  fnArray.forEach((fn, index) => {
+    const args = argsArray[index] || [];
+    if (fn === op.save) {
+      matrixStack.push([...matrixStack[matrixStack.length - 1]]);
+      return;
+    }
+    if (fn === op.restore) {
+      if (matrixStack.length > 1) matrixStack.pop();
+      return;
+    }
+    if (fn === op.transform && args.length >= 6) {
+      matrixStack[matrixStack.length - 1] = multiplyPdfMatrix(matrixStack[matrixStack.length - 1], args);
+      return;
+    }
+    if (fn !== op.constructPath) return;
+
+    const pathOps = args[0] || [];
+    const pathArgs = args[1] || [];
+    let cursor = 0;
+    let current = null;
+    const matrix = matrixStack[matrixStack.length - 1];
+
+    pathOps.forEach((pathOp) => {
+      if (pathOp === op.moveTo) {
+        current = transformPdfPoint(pathArgs[cursor], pathArgs[cursor + 1], matrix);
+        cursor += 2;
+        return;
+      }
+      if (pathOp === op.lineTo) {
+        const next = transformPdfPoint(pathArgs[cursor], pathArgs[cursor + 1], matrix);
+        cursor += 2;
+        if (current) segments.push(normalizePdfLineSegment(current, next));
+        current = next;
+        return;
+      }
+      if (pathOp === op.rectangle) {
+        const x = pathArgs[cursor];
+        const y = pathArgs[cursor + 1];
+        const w = pathArgs[cursor + 2];
+        const h = pathArgs[cursor + 3];
+        cursor += 4;
+        const p1 = transformPdfPoint(x, y, matrix);
+        const p2 = transformPdfPoint(x + w, y, matrix);
+        const p3 = transformPdfPoint(x + w, y + h, matrix);
+        const p4 = transformPdfPoint(x, y + h, matrix);
+        segments.push(normalizePdfLineSegment(p1, p2), normalizePdfLineSegment(p2, p3), normalizePdfLineSegment(p3, p4), normalizePdfLineSegment(p4, p1));
+        current = p1;
+        return;
+      }
+      if (pathOp === op.curveTo) {
+        cursor += 6;
+        return;
+      }
+      if (pathOp === op.curveTo2 || pathOp === op.curveTo3) {
+        cursor += 4;
+      }
+    });
+  });
+
+  return segments.filter((segment) => {
+    const horizontal = Math.abs(segment.y1 - segment.y2) <= 1.2 && Math.abs(segment.x2 - segment.x1) >= 10;
+    const vertical = Math.abs(segment.x1 - segment.x2) <= 1.2 && Math.abs(segment.y2 - segment.y1) >= 10;
+    const insidePage = segment.x2 >= -2 && segment.y2 >= -2 && segment.x1 <= viewport.width + 2 && segment.y1 <= viewport.height + 2;
+    return insidePage && (horizontal || vertical);
+  });
+}
+
+function multiplyPdfMatrix(a, b) {
+  return [
+    a[0] * b[0] + a[2] * b[1],
+    a[1] * b[0] + a[3] * b[1],
+    a[0] * b[2] + a[2] * b[3],
+    a[1] * b[2] + a[3] * b[3],
+    a[0] * b[4] + a[2] * b[5] + a[4],
+    a[1] * b[4] + a[3] * b[5] + a[5],
+  ];
+}
+
+function transformPdfPoint(x, y, matrix) {
+  return {
+    x: matrix[0] * x + matrix[2] * y + matrix[4],
+    y: matrix[1] * x + matrix[3] * y + matrix[5],
+  };
+}
+
+function normalizePdfLineSegment(a, b) {
+  return {
+    x1: Math.min(a.x, b.x),
+    y1: Math.min(a.y, b.y),
+    x2: Math.max(a.x, b.x),
+    y2: Math.max(a.y, b.y),
+  };
+}
+
+function buildPdfTableCellsFromLines(segments, pageWidth, pageHeight) {
+  const horizontal = segments.filter((segment) => Math.abs(segment.y1 - segment.y2) <= 1.2);
+  const vertical = segments.filter((segment) => Math.abs(segment.x1 - segment.x2) <= 1.2);
+  if (horizontal.length < 2 || vertical.length < 2) return [];
+
+  const xs = clusterPdfCoords(vertical.flatMap((segment) => [segment.x1]));
+  const ys = clusterPdfCoords(horizontal.flatMap((segment) => [segment.y1]));
+  const cells = [];
+
+  for (let xi = 0; xi < xs.length - 1; xi += 1) {
+    for (let yi = 0; yi < ys.length - 1; yi += 1) {
+      const x1 = xs[xi];
+      const x2 = xs[xi + 1];
+      const y1 = ys[yi];
+      const y2 = ys[yi + 1];
+      const width = x2 - x1;
+      const height = y2 - y1;
+      if (width < 14 || height < 8 || width > pageWidth * 0.95 || height > pageHeight * 0.6) continue;
+
+      const hasTop = hasPdfHorizontalCover(horizontal, y2, x1, x2);
+      const hasBottom = hasPdfHorizontalCover(horizontal, y1, x1, x2);
+      const hasLeft = hasPdfVerticalCover(vertical, x1, y1, y2);
+      const hasRight = hasPdfVerticalCover(vertical, x2, y1, y2);
+      if (hasTop && hasBottom && hasLeft && hasRight) {
+        cells.push({ x: x1, y: y1, width, height, x2, y2 });
+      }
+    }
+  }
+
+  return mergePdfTableCells(cells);
+}
+
+function clusterPdfCoords(values, tolerance = 2) {
+  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  const clusters = [];
+  sorted.forEach((value) => {
+    const cluster = clusters[clusters.length - 1];
+    if (cluster && Math.abs(cluster[cluster.length - 1] - value) <= tolerance) {
+      cluster.push(value);
+    } else {
+      clusters.push([value]);
+    }
+  });
+  return clusters.map((cluster) => cluster.reduce((sum, value) => sum + value, 0) / cluster.length);
+}
+
+function hasPdfHorizontalCover(lines, y, x1, x2) {
+  return lines.some((line) => Math.abs(line.y1 - y) <= 2.2 && line.x1 <= x1 + 3 && line.x2 >= x2 - 3);
+}
+
+function hasPdfVerticalCover(lines, x, y1, y2) {
+  return lines.some((line) => Math.abs(line.x1 - x) <= 2.2 && line.y1 <= y1 + 3 && line.y2 >= y2 - 3);
+}
+
+function mergePdfTableCells(cells) {
+  const map = new Map();
+  cells.forEach((cell) => {
+    const key = `${Math.round(cell.x)}:${Math.round(cell.y)}:${Math.round(cell.width)}:${Math.round(cell.height)}`;
+    map.set(key, cell);
+  });
+  return [...map.values()];
+}
+
+function findPdfTableCell(bounds, cells) {
+  if (!cells.length) return null;
+  const cx = bounds.x + bounds.width / 2;
+  const cy = bounds.y + bounds.height / 2;
+  const candidates = cells.filter((cell) => cx >= cell.x - 1 && cx <= cell.x2 + 1 && cy >= cell.y - 1 && cy <= cell.y2 + 1);
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => a.width * a.height - b.width * b.height)[0];
+}
+
+function inferPdfCellAlign(bounds, cell, text) {
+  const centerDelta = Math.abs(bounds.x + bounds.width / 2 - (cell.x + cell.width / 2));
+  const shortText = [...String(text || "")].length <= 16;
+  return shortText || centerDelta < cell.width * 0.18 ? "center" : "left";
 }
 
 function extractPdfLineSegments(items, pageWidth = 595.28) {
@@ -1728,15 +1932,18 @@ async function downloadPdfTranslation() {
 
 function drawPdfOverlayTranslation(page, segment, font, rgb) {
   const sourceBounds = segment.layout.bounds;
-  const fitBounds = {
-    ...sourceBounds,
-    width: Math.max(sourceBounds.width, Number(segment.layout.availableWidth || 0)),
-    height: Math.max(sourceBounds.height, Number(segment.layout.availableHeight || 0)),
-  };
+  const cell = segment.layout.tableCell;
+  const fitBounds = cell
+    ? { x: cell.x + 2, y: cell.y + 2, width: Math.max(4, cell.width - 4), height: Math.max(4, cell.height - 4) }
+    : {
+        ...sourceBounds,
+        width: Math.max(sourceBounds.width, Number(segment.layout.availableWidth || 0)),
+        height: Math.max(sourceBounds.height, Number(segment.layout.availableHeight || 0)),
+      };
   const text = segment.translation.trim();
   const paddingX = 0.7;
   const paddingY = 0.7;
-  const isTableLike = Number(segment.layout.rowSegmentCount || 1) > 1;
+  const isTableLike = Boolean(cell) || Number(segment.layout.rowSegmentCount || 1) > 1;
   const fit = fitPdfTextSize(text, font, fitBounds, segment.layout.fontSize || 10, segment.original, segment.layout);
   const fontSize = fit.fontSize;
   const lines = fit.lines;
@@ -1759,8 +1966,10 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
   const fitY = isTableLike ? Math.max(0, sourceBounds.y - Math.max(0, (fitBounds.height - sourceBounds.height) / 2)) : sourceBounds.y;
   let y = fitY + Math.max(0, (fitBounds.height - textHeight) / 2) + (lines.length - 1) * lineHeight;
   lines.forEach((line) => {
+    const lineWidth = font.widthOfTextAtSize(line, fontSize);
+    const x = segment.layout.cellAlign === "center" ? fitBounds.x + Math.max(0, (fitBounds.width - lineWidth) / 2) : fitBounds.x;
     page.drawText(line, {
-      x: fitBounds.x,
+      x,
       y,
       size: fontSize,
       font,
