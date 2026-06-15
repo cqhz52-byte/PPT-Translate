@@ -10,6 +10,9 @@ const state = {
   pdfTableCells: new Map(),
   pdfBytes: null,
   installPrompt: null,
+  wakeLock: null,
+  wakeLockNoticeShown: false,
+  wakeLockWarningShown: false,
 };
 
 const els = {
@@ -62,10 +65,16 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=33").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=34").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && document.body.classList.contains("is-busy")) {
+    requestScreenWakeLock();
+  }
+});
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
@@ -928,7 +937,55 @@ function setBusy(isBusy, message = "") {
   if (els.statusVisual) {
     els.statusVisual.classList.toggle("active", isBusy);
   }
+  if (isBusy) {
+    requestScreenWakeLock();
+  } else {
+    releaseScreenWakeLock();
+  }
   if (message) setStatus(message);
+}
+
+async function requestScreenWakeLock() {
+  if (!("wakeLock" in navigator)) {
+    if (!state.wakeLockWarningShown) {
+      state.wakeLockWarningShown = true;
+      showToast("当前浏览器不支持自动保持屏幕常亮，请尽量停留在当前页面。", true);
+    }
+    return false;
+  }
+
+  try {
+    if (state.wakeLock) return true;
+    const lock = await navigator.wakeLock.request("screen");
+    state.wakeLock = lock;
+    lock.addEventListener("release", () => {
+      if (state.wakeLock === lock) state.wakeLock = null;
+    });
+
+    if (!state.wakeLockNoticeShown) {
+      state.wakeLockNoticeShown = true;
+      showToast("处理期间已尝试保持屏幕常亮，请尽量不要切到后台。");
+    }
+    return true;
+  } catch (error) {
+    console.warn("Screen wake lock unavailable", error);
+    if (!state.wakeLockWarningShown) {
+      state.wakeLockWarningShown = true;
+      showToast("当前系统未允许屏幕常亮，请避免锁屏或切到后台。", true);
+    }
+    return false;
+  }
+}
+
+async function releaseScreenWakeLock() {
+  if (!state.wakeLock) return;
+  const lock = state.wakeLock;
+  state.wakeLock = null;
+  try {
+    await lock.release();
+  } catch (error) {
+    console.warn("Screen wake lock release failed", error);
+  }
 }
 
 function openPreview() {
