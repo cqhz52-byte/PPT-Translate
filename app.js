@@ -58,7 +58,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=25").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=26").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -300,13 +300,19 @@ function extractPdfLineSegments(items, pageWidth = 595.28) {
     rows.set(key, row);
   });
 
-  return [...rows.entries()]
+  const sortedRows = [...rows.entries()].sort((a, b) => Number(b[0]) - Number(a[0]));
+
+  return sortedRows
     .sort((a, b) => Number(b[0]) - Number(a[0]))
-    .flatMap(([, row]) => splitPdfRowIntoSegments(row, pageWidth))
+    .flatMap(([key, row], index) => {
+      const nextKey = sortedRows[index + 1]?.[0];
+      const rowGap = nextKey === undefined ? 0 : Math.max(0, Number(key) - Number(nextKey));
+      return splitPdfRowIntoSegments(row, pageWidth, rowGap);
+    })
     .filter((line) => line.text);
 }
 
-function splitPdfRowIntoSegments(row, pageWidth) {
+function splitPdfRowIntoSegments(row, pageWidth, rowGap = 0) {
   const sorted = row.sort((a, b) => a.x - b.x);
   const maxHeight = Math.max(...sorted.map((item) => item.height));
   const charWidths = sorted
@@ -348,17 +354,21 @@ function splitPdfRowIntoSegments(row, pageWidth) {
     const textWidth = Math.max(8, maxX - minX);
     const availableRight = next ? next.minX - 3 : pageWidth - 30;
     const availableWidth = Math.max(textWidth, availableRight - minX);
+    const isTableLike = groupBounds.length > 1;
+    const baseHeight = Math.max(7, localMaxHeight * 1.32);
+    const availableHeight = isTableLike && rowGap > localMaxHeight * 1.6 ? Math.max(baseHeight, rowGap * 0.72) : baseHeight;
 
     return {
       text,
       fontSize: localMaxHeight,
       availableWidth,
+      availableHeight,
       rowSegmentCount: groups.length,
       bounds: {
         x: minX,
         y: minY - localMaxHeight * 0.25,
         width: textWidth,
-        height: Math.max(7, localMaxHeight * 1.32),
+        height: baseHeight,
       },
     };
   });
@@ -743,12 +753,11 @@ async function downloadPdfTranslation() {
   const font = await pdfDoc.embedFont(fontBytes, { subset: true });
   const pages = pdfDoc.getPages();
   const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.translation.trim() && segment.layout?.bounds);
-  const pageProfiles = buildPdfPageProfiles(translatedSegments);
 
   for (let index = 0; index < translatedSegments.length; index += 1) {
     const segment = translatedSegments[index];
     const page = pages[Number(segment.slideNumber) - 1];
-    if (page) drawPdfOverlayTranslation(page, segment, font, rgb, pageProfiles.get(segment.slideNumber));
+    if (page) drawPdfOverlayTranslation(page, segment, font, rgb);
 
     if (index % 12 === 0 || index === translatedSegments.length - 1) {
       const ratio = translatedSegments.length ? (index + 1) / translatedSegments.length : 1;
@@ -775,21 +784,22 @@ async function downloadPdfTranslation() {
   setStatus("PDF 导出完成。");
 }
 
-function drawPdfOverlayTranslation(page, segment, font, rgb, pageProfile) {
+function drawPdfOverlayTranslation(page, segment, font, rgb) {
   const sourceBounds = segment.layout.bounds;
   const bounds = {
     ...sourceBounds,
     width: Math.max(sourceBounds.width, Number(segment.layout.availableWidth || 0)),
+    height: Math.max(sourceBounds.height, Number(segment.layout.availableHeight || 0)),
   };
   const text = segment.translation.trim();
   const paddingX = 0.7;
   const paddingY = 0.7;
-  const fit = fitPdfTextSize(text, font, bounds, segment.layout.fontSize || 10, segment.original, pageProfile, segment.layout);
+  const fit = fitPdfTextSize(text, font, bounds, segment.layout.fontSize || 10, segment.original, segment.layout);
   const fontSize = fit.fontSize;
   const lines = fit.lines;
   const lineHeight = fit.lineHeight;
-  const overlayHeight = bounds.height + paddingY * 2;
-  const overlayY = Math.max(0, bounds.y - paddingY);
+  const overlayHeight = Math.max(sourceBounds.height + paddingY * 2, lines.length * lineHeight + paddingY * 2);
+  const overlayY = Math.max(0, sourceBounds.y - Math.max(0, (overlayHeight - sourceBounds.height) / 2) - paddingY);
 
   page.drawRectangle({
     x: Math.max(0, bounds.x - paddingX),
@@ -814,30 +824,37 @@ function drawPdfOverlayTranslation(page, segment, font, rgb, pageProfile) {
   });
 }
 
-function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", pageProfile = null, layout = null) {
+function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout = null) {
   const sourceFontSize = Math.max(4, Math.min(24, Number(sourceSize || 10) * 0.96));
-  const bodySize = pageProfile?.bodySize || sourceFontSize;
   const isTableLike = Number(layout?.rowSegmentCount || 1) > 1;
-  const isHeadingLike = !isTableLike && sourceFontSize > bodySize * 1.28;
-  const preferred = isHeadingLike ? Math.min(sourceFontSize, bodySize * 1.28) : bodySize;
+  const preferred = sourceFontSize;
   const targetWidth = Math.max(4, bounds.width);
-  const maxHeight = Math.max(5, bounds.height * (isTableLike ? 1.08 : 1.25));
-  const minSize = Math.max(3.8, preferred * (isTableLike ? 0.68 : 0.84));
+  const maxHeight = Math.max(5, bounds.height * (isTableLike ? 1.04 : 1.35));
+
+  if (!isTableLike) {
+    const lineHeight = preferred * 1.12;
+    const lines = wrapPdfText(text, font, preferred, targetWidth);
+    return { fontSize: preferred, lines, lineHeight };
+  }
+
+  const minSize = Math.max(4.8, preferred * 0.72);
 
   const textWidthAtPreferred = Math.max(0.1, font.widthOfTextAtSize(text, preferred));
   const estimatedSize = Math.min(preferred, (preferred * targetWidth) / textWidthAtPreferred);
 
   for (let size = preferred; size >= minSize; size -= 0.25) {
     const lineHeight = size * 1.12;
-    if (font.widthOfTextAtSize(text, size) <= targetWidth && lineHeight <= maxHeight) {
-      return { fontSize: size, lines: [text], lineHeight };
+    const lines = wrapPdfText(text, font, size, targetWidth);
+    if (lines.length * lineHeight <= maxHeight) {
+      return { fontSize: size, lines, lineHeight };
     }
   }
 
   for (let size = estimatedSize; size >= minSize; size -= 0.25) {
     const lineHeight = size * 1.12;
-    if (font.widthOfTextAtSize(text, size) <= targetWidth && lineHeight <= maxHeight) {
-      return { fontSize: size, lines: [text], lineHeight };
+    const lines = wrapPdfText(text, font, size, targetWidth);
+    if (lines.length * lineHeight <= maxHeight) {
+      return { fontSize: size, lines, lineHeight };
     }
   }
 
@@ -850,33 +867,6 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", pagePro
   }
 
   return { fontSize: minSize, lines: [text], lineHeight: minSize * 1.12 };
-}
-
-function buildPdfPageProfiles(segments) {
-  const profiles = new Map();
-  const groups = new Map();
-  segments.forEach((segment) => {
-    const list = groups.get(segment.slideNumber) || [];
-    const size = Number(segment.layout?.fontSize || 0);
-    if (size >= 5 && size <= 24) list.push(size);
-    groups.set(segment.slideNumber, list);
-  });
-
-  groups.forEach((sizes, pageNumber) => {
-    const bodySize = getMedianNumber(sizes) || 10;
-    profiles.set(pageNumber, {
-      bodySize: Math.max(5.5, Math.min(13, bodySize * 0.96)),
-    });
-  });
-
-  return profiles;
-}
-
-function getMedianNumber(values) {
-  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
-  if (!sorted.length) return 0;
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 async function loadPdfExportTools() {
