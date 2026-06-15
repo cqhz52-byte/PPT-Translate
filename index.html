@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon.svg">
-    <link rel="stylesheet" href="styles.css?v=31">
+    <link rel="stylesheet" href="styles.css?v=32">
   </head>
   <body>
     <main class="shell">
@@ -17,7 +17,7 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="Curaway">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v31 · Curaway 品牌动效</p>
+            <p class="version">v32 · 文件一键分享</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -83,6 +83,7 @@
             <button id="translateButton" class="primary" type="button" disabled>自动翻译</button>
             <button id="previewButton" type="button" disabled>预览译文</button>
             <button id="downloadButton" type="button" disabled>导出翻译文件</button>
+            <button id="shareButton" type="button" disabled>分享翻译文件</button>
           </div>
 
           <div class="stats" aria-live="polite">
@@ -150,7 +151,8 @@
             <p id="previewMeta">按页面/部件预览最终写入文件的文字。</p>
           </div>
           <div class="preview-actions">
-            <button id="previewDownloadButton" class="primary" type="button">导出文件</button>
+            <button id="previewDownloadButton" class="primary" type="button" disabled>导出文件</button>
+            <button id="previewShareButton" type="button" disabled>分享文件</button>
             <button class="icon-button" id="previewCloseButton" type="button" title="关闭预览" aria-label="关闭预览">
               <span aria-hidden="true">×</span>
             </button>
@@ -161,6 +163,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=31" type="module"></script>
+    <script src="app.js?v=32" type="module"></script>
   </body>
 </html>

@@ -20,11 +20,13 @@ const els = {
   translateButton: document.querySelector("#translateButton"),
   previewButton: document.querySelector("#previewButton"),
   downloadButton: document.querySelector("#downloadButton"),
+  shareButton: document.querySelector("#shareButton"),
   resetButton: document.querySelector("#resetButton"),
   installButton: document.querySelector("#installButton"),
   previewDialog: document.querySelector("#previewDialog"),
   previewCloseButton: document.querySelector("#previewCloseButton"),
   previewDownloadButton: document.querySelector("#previewDownloadButton"),
+  previewShareButton: document.querySelector("#previewShareButton"),
   previewBody: document.querySelector("#previewBody"),
   previewMeta: document.querySelector("#previewMeta"),
   translationDirection: document.querySelector("#translationDirection"),
@@ -60,7 +62,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=31").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=32").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -112,9 +114,11 @@ els.fileInput.addEventListener("change", async (event) => {
 els.translateButton.addEventListener("click", translateAll);
 els.previewButton.addEventListener("click", openPreview);
 els.downloadButton.addEventListener("click", downloadPresentation);
+els.shareButton.addEventListener("click", sharePresentation);
 els.resetButton.addEventListener("click", resetApp);
 els.previewCloseButton.addEventListener("click", closePreview);
 els.previewDownloadButton.addEventListener("click", downloadPresentation);
+els.previewShareButton.addEventListener("click", sharePresentation);
 els.previewDialog.addEventListener("click", (event) => {
   if (event.target === els.previewDialog) closePreview();
 });
@@ -743,52 +747,95 @@ async function downloadPresentation() {
 
   try {
     setBusy(true, `正在生成 ${getFileTypeName()}...`);
-
-    if (state.fileType === "pdf") {
-      await downloadPdfTranslation();
-      showToast("已生成翻译版 PDF。");
-      return;
-    }
-
-    if (!state.zip) return;
-
-    const grouped = groupByPath(state.segments);
-
-    for (const [path, segments] of grouped.entries()) {
-      const xmlText = await state.zip.file(path).async("text");
-      const doc = parser.parseFromString(xmlText, "application/xml");
-
-      if (state.fileType === "docx") {
-        writeWordSegments(doc, segments);
-      } else {
-        writePresentationSegments(doc, segments);
-      }
-
-      state.zip.file(path, serializer.serializeToString(doc));
-    }
-
-    const blob = await state.zip.generateAsync({
-      type: "blob",
-      mimeType:
-        state.fileType === "docx"
-          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          : "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    });
-
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = buildOutputName(state.file.name);
-    document.body.append(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    const { blob, filename } = await generateTranslatedFile();
+    saveBlobAsFile(blob, filename);
     showToast(`已生成翻译版 ${getFileTypeName()}。`);
   } catch (error) {
     showToast(error.message || "导出失败。", true);
   } finally {
     setBusy(false);
   }
+}
+
+async function sharePresentation() {
+  if (!state.file) return;
+
+  try {
+    setBusy(true, `正在生成可分享的 ${getFileTypeName()}...`);
+    const { blob, filename } = await generateTranslatedFile();
+    const file = new File([blob], filename, { type: blob.type || getOutputMimeType() });
+
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: filename,
+        text: "Curaway 文档翻译工具生成的翻译文件",
+      });
+      showToast("已打开系统分享面板。");
+      return;
+    }
+
+    saveBlobAsFile(blob, filename);
+    showToast("当前浏览器不支持直接分享文件，已先下载翻译文件，可从微信或文件管理器转发。", true);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      showToast("已取消分享。");
+    } else {
+      showToast(error.message || "分享失败。", true);
+    }
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function generateTranslatedFile() {
+  if (!state.file) throw new Error("请先选择文件。");
+
+  if (state.fileType === "pdf") {
+    const blob = await downloadPdfTranslation();
+    return { blob, filename: buildOutputName(state.file.name) };
+  }
+
+  if (!state.zip) throw new Error("缺少文档数据，请重新上传文件。");
+
+  const grouped = groupByPath(state.segments);
+
+  for (const [path, segments] of grouped.entries()) {
+    const xmlText = await state.zip.file(path).async("text");
+    const doc = parser.parseFromString(xmlText, "application/xml");
+
+    if (state.fileType === "docx") {
+      writeWordSegments(doc, segments);
+    } else {
+      writePresentationSegments(doc, segments);
+    }
+
+    state.zip.file(path, serializer.serializeToString(doc));
+  }
+
+  const blob = await state.zip.generateAsync({
+    type: "blob",
+    mimeType: getOutputMimeType(),
+  });
+
+  return { blob, filename: buildOutputName(state.file.name) };
+}
+
+function saveBlobAsFile(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function getOutputMimeType() {
+  if (state.fileType === "docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (state.fileType === "pdf") return "application/pdf";
+  return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 }
 
 function groupByPath(segments) {
@@ -855,8 +902,12 @@ function updateStats() {
   els.translateButton.disabled = !state.segments.length;
   els.previewButton.disabled = !state.segments.length;
   els.downloadButton.disabled = !state.segments.length;
+  els.shareButton.disabled = !state.segments.length;
   if (els.previewDownloadButton) {
     els.previewDownloadButton.disabled = !state.segments.length;
+  }
+  if (els.previewShareButton) {
+    els.previewShareButton.disabled = !state.segments.length;
   }
   setProgress(state.segments.length ? translated / state.segments.length : 0);
 }
@@ -865,8 +916,12 @@ function setBusy(isBusy, message = "") {
   els.translateButton.disabled = isBusy || !state.segments.length;
   els.previewButton.disabled = isBusy || !state.segments.length;
   els.downloadButton.disabled = isBusy || !state.segments.length;
+  els.shareButton.disabled = isBusy || !state.segments.length;
   if (els.previewDownloadButton) {
     els.previewDownloadButton.disabled = isBusy || !state.segments.length;
+  }
+  if (els.previewShareButton) {
+    els.previewShareButton.disabled = isBusy || !state.segments.length;
   }
   els.fileInput.disabled = isBusy;
   document.body.classList.toggle("is-busy", isBusy);
@@ -992,16 +1047,9 @@ async function downloadPdfTranslation() {
 
   const pdfBytes = await pdfDoc.save();
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = buildOutputName(state.file.name);
-  document.body.append(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
   setProgress(1);
   setStatus("PDF 导出完成。");
+  return blob;
 }
 
 function drawPdfOverlayTranslation(page, segment, font, rgb) {
@@ -1323,7 +1371,13 @@ function createPreviewBoxTools(segment, index) {
   exportButton.title = "导出翻译文件";
   exportButton.addEventListener("click", downloadPresentation);
 
-  tools.append(scaleInput, scaleValue, wrapButton, resetButton, exportButton);
+  const shareButton = document.createElement("button");
+  shareButton.type = "button";
+  shareButton.textContent = "分享";
+  shareButton.title = "分享翻译文件";
+  shareButton.addEventListener("click", sharePresentation);
+
+  tools.append(scaleInput, scaleValue, wrapButton, resetButton, exportButton, shareButton);
   return tools;
 }
 
