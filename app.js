@@ -58,7 +58,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=26").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=27").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -786,7 +786,7 @@ async function downloadPdfTranslation() {
 
 function drawPdfOverlayTranslation(page, segment, font, rgb) {
   const sourceBounds = segment.layout.bounds;
-  const bounds = {
+  const fitBounds = {
     ...sourceBounds,
     width: Math.max(sourceBounds.width, Number(segment.layout.availableWidth || 0)),
     height: Math.max(sourceBounds.height, Number(segment.layout.availableHeight || 0)),
@@ -794,27 +794,31 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
   const text = segment.translation.trim();
   const paddingX = 0.7;
   const paddingY = 0.7;
-  const fit = fitPdfTextSize(text, font, bounds, segment.layout.fontSize || 10, segment.original, segment.layout);
+  const isTableLike = Number(segment.layout.rowSegmentCount || 1) > 1;
+  const fit = fitPdfTextSize(text, font, fitBounds, segment.layout.fontSize || 10, segment.original, segment.layout);
   const fontSize = fit.fontSize;
   const lines = fit.lines;
   const lineHeight = fit.lineHeight;
-  const overlayHeight = Math.max(sourceBounds.height + paddingY * 2, lines.length * lineHeight + paddingY * 2);
-  const overlayY = Math.max(0, sourceBounds.y - Math.max(0, (overlayHeight - sourceBounds.height) / 2) - paddingY);
+  const eraseX = Math.max(0, sourceBounds.x - paddingX);
+  const eraseY = Math.max(0, sourceBounds.y - paddingY);
+  const eraseWidth = sourceBounds.width + paddingX * 2;
+  const eraseHeight = sourceBounds.height + paddingY * 2;
 
   page.drawRectangle({
-    x: Math.max(0, bounds.x - paddingX),
-    y: overlayY,
-    width: bounds.width + paddingX * 2,
-    height: overlayHeight,
+    x: eraseX,
+    y: eraseY,
+    width: eraseWidth,
+    height: eraseHeight,
     color: rgb(1, 1, 1),
     opacity: 1,
   });
 
   const textHeight = lines.length * lineHeight;
-  let y = overlayY + Math.max(paddingY, (overlayHeight - textHeight) / 2) + (lines.length - 1) * lineHeight;
+  const fitY = isTableLike ? Math.max(0, sourceBounds.y - Math.max(0, (fitBounds.height - sourceBounds.height) / 2)) : sourceBounds.y;
+  let y = fitY + Math.max(0, (fitBounds.height - textHeight) / 2) + (lines.length - 1) * lineHeight;
   lines.forEach((line) => {
     page.drawText(line, {
-      x: bounds.x,
+      x: fitBounds.x,
       y,
       size: fontSize,
       font,
