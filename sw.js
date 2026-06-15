@@ -1,11 +1,11 @@
-const CACHE_NAME = "ppt-translator-pwa-v24";
+const CACHE_NAME = "ppt-translator-pwa-v25";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
-  "./styles.css?v=24",
+  "./styles.css?v=25",
   "./app.js",
-  "./app.js?v=24",
+  "./app.js?v=25",
   "./manifest.webmanifest",
   "./vendor/jszip.min.js",
   "./icons/icon.svg",

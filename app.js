@@ -58,7 +58,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=24").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=25").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -238,7 +238,7 @@ async function loadPdfDocument(file) {
       height: viewport.height || 841.89,
     });
     const content = await page.getTextContent();
-    const lines = extractPdfLineSegments(content.items);
+    const lines = extractPdfLineSegments(content.items, viewport.width || 595.28);
 
     lines.forEach((line, index) => {
       state.segments.push({
@@ -252,6 +252,8 @@ async function loadPdfDocument(file) {
         layout: {
           bounds: line.bounds,
           fontSize: line.fontSize,
+          availableWidth: line.availableWidth,
+          rowSegmentCount: line.rowSegmentCount,
         },
         overrides: createSegmentOverrides(),
         original: line.text,
@@ -275,7 +277,7 @@ async function loadPdfJs() {
   return window.pdfjsLib;
 }
 
-function extractPdfLineSegments(items) {
+function extractPdfLineSegments(items, pageWidth = 595.28) {
   const rows = new Map();
   items.forEach((item) => {
     const text = String(item.str || "").trim();
@@ -300,11 +302,11 @@ function extractPdfLineSegments(items) {
 
   return [...rows.entries()]
     .sort((a, b) => Number(b[0]) - Number(a[0]))
-    .flatMap(([, row]) => splitPdfRowIntoSegments(row))
+    .flatMap(([, row]) => splitPdfRowIntoSegments(row, pageWidth))
     .filter((line) => line.text);
 }
 
-function splitPdfRowIntoSegments(row) {
+function splitPdfRowIntoSegments(row, pageWidth) {
   const sorted = row.sort((a, b) => a.x - b.x);
   const maxHeight = Math.max(...sorted.map((item) => item.height));
   const charWidths = sorted
@@ -327,20 +329,35 @@ function splitPdfRowIntoSegments(row) {
 
   if (current.length) groups.push(current);
 
-  return groups.map((group) => {
+  const groupBounds = groups.map((group) => ({
+    group,
+    minX: Math.min(...group.map((item) => item.x)),
+    minY: Math.min(...group.map((item) => item.y)),
+    maxX: Math.max(...group.map((item) => item.x + item.width)),
+    maxHeight: Math.max(...group.map((item) => item.height)),
+  }));
+
+  return groupBounds.map((item, index) => {
+    const group = item.group;
+    const next = groupBounds[index + 1];
     const minX = Math.min(...group.map((item) => item.x));
     const minY = Math.min(...group.map((item) => item.y));
     const maxX = Math.max(...group.map((item) => item.x + item.width));
     const localMaxHeight = Math.max(...group.map((item) => item.height));
     const text = group.map((item) => item.text).join(" ").replace(/\s+/g, " ").trim();
+    const textWidth = Math.max(8, maxX - minX);
+    const availableRight = next ? next.minX - 3 : pageWidth - 30;
+    const availableWidth = Math.max(textWidth, availableRight - minX);
 
     return {
       text,
       fontSize: localMaxHeight,
+      availableWidth,
+      rowSegmentCount: groups.length,
       bounds: {
         x: minX,
         y: minY - localMaxHeight * 0.25,
-        width: Math.max(8, maxX - minX),
+        width: textWidth,
         height: Math.max(7, localMaxHeight * 1.32),
       },
     };
@@ -726,11 +743,12 @@ async function downloadPdfTranslation() {
   const font = await pdfDoc.embedFont(fontBytes, { subset: true });
   const pages = pdfDoc.getPages();
   const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.translation.trim() && segment.layout?.bounds);
+  const pageProfiles = buildPdfPageProfiles(translatedSegments);
 
   for (let index = 0; index < translatedSegments.length; index += 1) {
     const segment = translatedSegments[index];
     const page = pages[Number(segment.slideNumber) - 1];
-    if (page) drawPdfOverlayTranslation(page, segment, font, rgb);
+    if (page) drawPdfOverlayTranslation(page, segment, font, rgb, pageProfiles.get(segment.slideNumber));
 
     if (index % 12 === 0 || index === translatedSegments.length - 1) {
       const ratio = translatedSegments.length ? (index + 1) / translatedSegments.length : 1;
@@ -757,12 +775,16 @@ async function downloadPdfTranslation() {
   setStatus("PDF 导出完成。");
 }
 
-function drawPdfOverlayTranslation(page, segment, font, rgb) {
-  const bounds = segment.layout.bounds;
+function drawPdfOverlayTranslation(page, segment, font, rgb, pageProfile) {
+  const sourceBounds = segment.layout.bounds;
+  const bounds = {
+    ...sourceBounds,
+    width: Math.max(sourceBounds.width, Number(segment.layout.availableWidth || 0)),
+  };
   const text = segment.translation.trim();
   const paddingX = 0.7;
   const paddingY = 0.7;
-  const fit = fitPdfTextSize(text, font, bounds, segment.layout.fontSize || 10, segment.original);
+  const fit = fitPdfTextSize(text, font, bounds, segment.layout.fontSize || 10, segment.original, pageProfile, segment.layout);
   const fontSize = fit.fontSize;
   const lines = fit.lines;
   const lineHeight = fit.lineHeight;
@@ -792,15 +814,25 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
   });
 }
 
-function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "") {
-  const preferred = Math.max(4, Math.min(24, Number(sourceSize || 10) * 0.96));
-  const sourceWidthAtPreferred = sourceText ? font.widthOfTextAtSize(sourceText, preferred) : bounds.width;
-  const targetWidth = Math.max(4, Math.min(bounds.width, sourceWidthAtPreferred * 1.04));
-  const maxHeight = Math.max(5, bounds.height * 1.04);
-  const minSize = 3.6;
+function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", pageProfile = null, layout = null) {
+  const sourceFontSize = Math.max(4, Math.min(24, Number(sourceSize || 10) * 0.96));
+  const bodySize = pageProfile?.bodySize || sourceFontSize;
+  const isTableLike = Number(layout?.rowSegmentCount || 1) > 1;
+  const isHeadingLike = !isTableLike && sourceFontSize > bodySize * 1.28;
+  const preferred = isHeadingLike ? Math.min(sourceFontSize, bodySize * 1.28) : bodySize;
+  const targetWidth = Math.max(4, bounds.width);
+  const maxHeight = Math.max(5, bounds.height * (isTableLike ? 1.08 : 1.25));
+  const minSize = Math.max(3.8, preferred * (isTableLike ? 0.68 : 0.84));
 
   const textWidthAtPreferred = Math.max(0.1, font.widthOfTextAtSize(text, preferred));
   const estimatedSize = Math.min(preferred, (preferred * targetWidth) / textWidthAtPreferred);
+
+  for (let size = preferred; size >= minSize; size -= 0.25) {
+    const lineHeight = size * 1.12;
+    if (font.widthOfTextAtSize(text, size) <= targetWidth && lineHeight <= maxHeight) {
+      return { fontSize: size, lines: [text], lineHeight };
+    }
+  }
 
   for (let size = estimatedSize; size >= minSize; size -= 0.25) {
     const lineHeight = size * 1.12;
@@ -809,7 +841,7 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "") {
     }
   }
 
-  for (let size = Math.min(preferred, 8); size >= minSize; size -= 0.25) {
+  for (let size = minSize; size >= 3.6; size -= 0.2) {
     const lineHeight = size * 1.12;
     const lines = wrapPdfText(text, font, size, targetWidth);
     if (lines.length * lineHeight <= maxHeight) {
@@ -818,6 +850,33 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "") {
   }
 
   return { fontSize: minSize, lines: [text], lineHeight: minSize * 1.12 };
+}
+
+function buildPdfPageProfiles(segments) {
+  const profiles = new Map();
+  const groups = new Map();
+  segments.forEach((segment) => {
+    const list = groups.get(segment.slideNumber) || [];
+    const size = Number(segment.layout?.fontSize || 0);
+    if (size >= 5 && size <= 24) list.push(size);
+    groups.set(segment.slideNumber, list);
+  });
+
+  groups.forEach((sizes, pageNumber) => {
+    const bodySize = getMedianNumber(sizes) || 10;
+    profiles.set(pageNumber, {
+      bodySize: Math.max(5.5, Math.min(13, bodySize * 0.96)),
+    });
+  });
+
+  return profiles;
+}
+
+function getMedianNumber(values) {
+  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!sorted.length) return 0;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 async function loadPdfExportTools() {
