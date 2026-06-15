@@ -6,6 +6,7 @@ const state = {
   slideCount: 0,
   slideSize: { cx: 12192000, cy: 6858000 },
   slideVisuals: new Map(),
+  pdfPageSizes: new Map(),
   installPrompt: null,
 };
 
@@ -47,13 +48,16 @@ const DEEPSEEK_API_BASE = "https://api.deepseek.com";
 const TRANSLATE_PROXY = "./api/translate";
 const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+const PDFLIB_URL = "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm";
+const FONTKIT_URL = "https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/+esm";
+const PDF_FONT_URL = "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf";
 const parser = new DOMParser();
 const serializer = new XMLSerializer();
 
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=19").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=20").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -147,6 +151,7 @@ async function loadOfficeFile(file) {
     state.slideCount = 0;
     state.slideSize = { cx: 12192000, cy: 6858000 };
     state.slideVisuals = new Map();
+    state.pdfPageSizes = new Map();
 
     if (state.fileType === "pdf") {
       await loadPdfDocument(file);
@@ -223,6 +228,11 @@ async function loadPdfDocument(file) {
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1 });
+    state.pdfPageSizes.set(`pdf/page-${pageNumber}`, {
+      width: viewport.width || 595.28,
+      height: viewport.height || 841.89,
+    });
     const content = await page.getTextContent();
     const lines = extractPdfLines(content.items);
 
@@ -455,8 +465,8 @@ async function downloadPresentation() {
     setBusy(true, `正在生成 ${getFileTypeName()}...`);
 
     if (state.fileType === "pdf") {
-      downloadPdfTextTranslation();
-      showToast("已导出 PDF 译文文本。");
+      await downloadPdfTranslation();
+      showToast("已生成翻译版 PDF。");
       return;
     }
 
@@ -647,18 +657,65 @@ function renderPreview() {
   });
 }
 
-function downloadPdfTextTranslation() {
-  const groups = groupSegmentsForPreview();
-  const content = groups
-    .map((group) => {
-      const body = group.segments
-        .map((segment) => segment.translation.trim() || segment.original)
-        .join("\n");
-      return `${group.label}\n${"=".repeat(group.label.length)}\n${body}`;
-    })
-    .join("\n\n");
+async function downloadPdfTranslation() {
+  const { PDFDocument, rgb, fontkit, fontBytes } = await loadPdfExportTools();
+  const pdfDoc = await PDFDocument.create();
+  pdfDoc.registerFontkit(fontkit);
+  pdfDoc.setTitle(`${state.file.name} translated`);
 
-  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const font = await pdfDoc.embedFont(fontBytes, { subset: true });
+  const groups = groupSegmentsForPreview();
+  const margin = 42;
+  const titleSize = 13;
+  const bodySize = 10.5;
+  const lineHeight = bodySize * 1.42;
+
+  groups.forEach((group) => {
+    const size = state.pdfPageSizes.get(group.segments[0]?.path) || { width: 595.28, height: 841.89 };
+    let page = pdfDoc.addPage([size.width, size.height]);
+    let cursorY = size.height - margin;
+
+    const drawHeader = (label) => {
+      page.drawText(label, {
+        x: margin,
+        y: cursorY,
+        size: titleSize,
+        font,
+        color: rgb(0.08, 0.26, 0.35),
+      });
+      cursorY -= titleSize * 1.9;
+    };
+
+    const addPage = () => {
+      page = pdfDoc.addPage([size.width, size.height]);
+      cursorY = size.height - margin;
+      drawHeader(`${group.label}（续）`);
+    };
+
+    drawHeader(group.label);
+
+    group.segments.forEach((segment) => {
+      const text = segment.translation.trim() || segment.original;
+      const lines = wrapPdfText(text, font, bodySize, size.width - margin * 2);
+
+      lines.forEach((line) => {
+        if (cursorY < margin + lineHeight) addPage();
+        page.drawText(line, {
+          x: margin,
+          y: cursorY,
+          size: bodySize,
+          font,
+          color: rgb(0.09, 0.12, 0.13),
+        });
+        cursorY -= lineHeight;
+      });
+
+      cursorY -= bodySize * 0.8;
+    });
+  });
+
+  const pdfBytes = await pdfDoc.save();
+  const blob = new Blob([pdfBytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -667,6 +724,65 @@ function downloadPdfTextTranslation() {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+async function loadPdfExportTools() {
+  if (!window.pdfLibTools) {
+    const [pdfLib, fontkitModule, fontResponse] = await Promise.all([
+      import(PDFLIB_URL),
+      import(FONTKIT_URL),
+      fetch(PDF_FONT_URL),
+    ]);
+
+    if (!fontResponse.ok) {
+      throw new Error(`PDF 字体加载失败：${fontResponse.status}`);
+    }
+
+    window.pdfLibTools = {
+      PDFDocument: pdfLib.PDFDocument,
+      rgb: pdfLib.rgb,
+      fontkit: fontkitModule.default || fontkitModule,
+      fontBytes: await fontResponse.arrayBuffer(),
+    };
+  }
+
+  return window.pdfLibTools;
+}
+
+function wrapPdfText(text, font, fontSize, maxWidth) {
+  const paragraphs = String(text || "").split(/\r\n|\r|\n/);
+  const lines = [];
+
+  paragraphs.forEach((paragraph) => {
+    const tokens = /[\u3400-\u9fff]/.test(paragraph) ? [...paragraph] : paragraph.split(/(\s+)/).filter(Boolean);
+    let current = "";
+
+    tokens.forEach((token) => {
+      const candidate = current ? `${current}${token}` : token;
+      if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) {
+        current = candidate;
+        return;
+      }
+
+      if (current.trim()) lines.push(current.trim());
+      current = token.trim();
+
+      while (font.widthOfTextAtSize(current, fontSize) > maxWidth && [...current].length > 1) {
+        let part = "";
+        for (const char of current) {
+          if (font.widthOfTextAtSize(part + char, fontSize) > maxWidth) break;
+          part += char;
+        }
+        lines.push(part);
+        current = current.slice(part.length);
+      }
+    });
+
+    if (current.trim()) lines.push(current.trim());
+    if (!paragraph.trim()) lines.push("");
+  });
+
+  return lines.length ? lines : [""];
 }
 
 function createPreviewItem(segment) {
@@ -932,6 +1048,7 @@ function resetApp(clearInput = true) {
   state.segments = [];
   state.slideCount = 0;
   state.slideVisuals = new Map();
+  state.pdfPageSizes = new Map();
   if (clearInput) els.fileInput.value = "";
   els.fileMeta.textContent = "支持 PPTX / DOCX / PDF；旧版 PPT/DOC 请先另存";
   renderSegments();
@@ -940,7 +1057,7 @@ function resetApp(clearInput = true) {
 }
 
 function buildOutputName(name) {
-  if (state.fileType === "pdf") return name.replace(/\.pdf$/i, "") + "-translated.txt";
+  if (state.fileType === "pdf") return name.replace(/\.pdf$/i, "") + "-translated.pdf";
   return name.replace(/\.(pptx|docx)$/i, "") + `-translated.${state.fileType || "pptx"}`;
 }
 
