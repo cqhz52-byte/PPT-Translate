@@ -11,6 +11,7 @@ const state = {
 
 const els = {
   fileInput: document.querySelector("#fileInput"),
+  uploadZone: document.querySelector(".upload-zone"),
   fileMeta: document.querySelector("#fileMeta"),
   segmentTable: document.querySelector("#segmentTable"),
   translateButton: document.querySelector("#translateButton"),
@@ -44,13 +45,15 @@ const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
 const SETTINGS_VERSION = 5;
 const DEEPSEEK_API_BASE = "https://api.deepseek.com";
 const TRANSLATE_PROXY = "./api/translate";
+const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
+const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const parser = new DOMParser();
 const serializer = new XMLSerializer();
 
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=18").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=19").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -73,6 +76,30 @@ els.fileInput.addEventListener("change", async (event) => {
   const [file] = event.target.files;
   if (!file) return;
   await loadOfficeFile(file);
+});
+
+["dragover", "drop"].forEach((eventName) => {
+  document.addEventListener(eventName, (event) => {
+    event.preventDefault();
+  });
+});
+
+["dragenter", "dragover"].forEach((eventName) => {
+  els.uploadZone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    els.uploadZone.classList.add("drag-over");
+  });
+});
+
+["dragleave", "drop"].forEach((eventName) => {
+  els.uploadZone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    if (eventName === "drop") {
+      const [file] = event.dataTransfer?.files || [];
+      if (file) loadOfficeFile(file);
+    }
+    els.uploadZone.classList.remove("drag-over");
+  });
 });
 
 els.translateButton.addEventListener("click", translateAll);
@@ -108,22 +135,28 @@ async function loadOfficeFile(file) {
       throw new Error("当前网页版只能可靠解析和回写 DOCX。请先用 Word/WPS 将 .doc 另存为 .docx。");
     }
 
-    if (!/\.(pptx|docx)$/i.test(file.name)) {
-      throw new Error("请选择 .pptx 或 .docx 文件。");
+    if (!/\.(pptx|docx|pdf)$/i.test(file.name)) {
+      throw new Error("请选择 .pptx、.docx 或 .pdf 文件。");
     }
 
     setBusy(true, "正在读取文件...");
     state.file = file;
-    state.fileType = /\.docx$/i.test(file.name) ? "docx" : "pptx";
-    state.zip = await JSZip.loadAsync(file);
+    state.fileType = getFileTypeFromName(file.name);
+    state.zip = null;
     state.segments = [];
     state.slideCount = 0;
     state.slideSize = { cx: 12192000, cy: 6858000 };
     state.slideVisuals = new Map();
 
+    if (state.fileType === "pdf") {
+      await loadPdfDocument(file);
+    } else {
+      state.zip = await JSZip.loadAsync(file);
+    }
+
     if (state.fileType === "docx") {
       await loadWordDocument();
-    } else {
+    } else if (state.fileType === "pptx") {
       await loadPresentation();
     }
 
@@ -181,6 +214,82 @@ async function loadPresentation() {
         });
       });
     }
+}
+
+async function loadPdfDocument(file) {
+  const pdfjs = await loadPdfJs();
+  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  state.slideCount = pdf.numPages;
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const lines = extractPdfLines(content.items);
+
+    splitPdfLines(lines).forEach((text, index) => {
+      state.segments.push({
+        id: `pdf-${pageNumber}-${index}`,
+        type: "pdf",
+        slideNumber: pageNumber,
+        locationLabel: `第 ${pageNumber} 页`,
+        path: `pdf/page-${pageNumber}`,
+        paragraphIndex: index,
+        textNodeCount: 1,
+        overrides: createSegmentOverrides(),
+        original: text,
+        translation: "",
+      });
+    });
+  }
+
+  if (!state.segments.length) {
+    throw new Error("这个 PDF 没有可提取的文本。若是扫描版 PDF，需要先 OCR 后再翻译。");
+  }
+}
+
+async function loadPdfJs() {
+  if (!window.pdfjsLib) {
+    const module = await import(PDFJS_URL);
+    window.pdfjsLib = module;
+  }
+
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  return window.pdfjsLib;
+}
+
+function extractPdfLines(items) {
+  const rows = new Map();
+  items.forEach((item) => {
+    const text = String(item.str || "").trim();
+    if (!text) return;
+
+    const transform = item.transform || [];
+    const x = Number(transform[4] || 0);
+    const y = Math.round(Number(transform[5] || 0) / 4) * 4;
+    const key = String(y);
+    const row = rows.get(key) || [];
+    row.push({ x, text });
+    rows.set(key, row);
+  });
+
+  return [...rows.entries()]
+    .sort((a, b) => Number(b[0]) - Number(a[0]))
+    .map(([, row]) => row.sort((a, b) => a.x - b.x).map((item) => item.text).join(" ").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function splitPdfLines(lines) {
+  const chunks = [];
+  lines.forEach((line) => {
+    if ([...line].length <= 900) {
+      chunks.push(line);
+      return;
+    }
+
+    const parts = line.match(/.{1,700}(?:\s|$)/g) || [line];
+    parts.map((part) => part.trim()).filter(Boolean).forEach((part) => chunks.push(part));
+  });
+  return chunks;
 }
 
 async function loadWordDocument() {
@@ -340,10 +449,19 @@ async function translateText({ apiBase, apiProxy, apiKey, model, direction, text
 }
 
 async function downloadPresentation() {
-  if (!state.zip || !state.file) return;
+  if (!state.file) return;
 
   try {
     setBusy(true, `正在生成 ${getFileTypeName()}...`);
+
+    if (state.fileType === "pdf") {
+      downloadPdfTextTranslation();
+      showToast("已导出 PDF 译文文本。");
+      return;
+    }
+
+    if (!state.zip) return;
+
     const grouped = groupByPath(state.segments);
 
     for (const [path, segments] of grouped.entries()) {
@@ -502,7 +620,14 @@ function renderPreview() {
     section.append(title);
 
     if (state.fileType === "pptx") {
-      section.append(createSlidePreview(group.segments));
+      try {
+        section.append(createSlidePreview(group.segments));
+      } catch (error) {
+        console.warn("PPT preview fallback", error);
+        group.segments.forEach((segment) => {
+          section.append(createPreviewItem(segment));
+        });
+      }
     } else {
       group.segments.forEach((segment) => {
         section.append(createPreviewItem(segment));
@@ -520,6 +645,28 @@ function renderPreview() {
   requestAnimationFrame(() => {
     els.previewBody.scrollTop = previousScrollTop;
   });
+}
+
+function downloadPdfTextTranslation() {
+  const groups = groupSegmentsForPreview();
+  const content = groups
+    .map((group) => {
+      const body = group.segments
+        .map((segment) => segment.translation.trim() || segment.original)
+        .join("\n");
+      return `${group.label}\n${"=".repeat(group.label.length)}\n${body}`;
+    })
+    .join("\n\n");
+
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = buildOutputName(state.file.name);
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function createPreviewItem(segment) {
@@ -786,13 +933,14 @@ function resetApp(clearInput = true) {
   state.slideCount = 0;
   state.slideVisuals = new Map();
   if (clearInput) els.fileInput.value = "";
-  els.fileMeta.textContent = "支持 PPTX / DOCX；旧版 PPT/DOC 请先另存";
+  els.fileMeta.textContent = "支持 PPTX / DOCX / PDF；旧版 PPT/DOC 请先另存";
   renderSegments();
   updateStats();
-  setStatus("请先选择一个 PPTX 或 DOCX 文件。");
+  setStatus("请先选择一个 PPTX、DOCX 或 PDF 文件。");
 }
 
 function buildOutputName(name) {
+  if (state.fileType === "pdf") return name.replace(/\.pdf$/i, "") + "-translated.txt";
   return name.replace(/\.(pptx|docx)$/i, "") + `-translated.${state.fileType || "pptx"}`;
 }
 
@@ -1151,7 +1299,15 @@ function countTextBodyParagraphs(textBody) {
 }
 
 function getFileTypeName() {
-  return state.fileType === "docx" ? "DOCX" : "PPTX";
+  if (state.fileType === "docx") return "DOCX";
+  if (state.fileType === "pdf") return "PDF";
+  return "PPTX";
+}
+
+function getFileTypeFromName(name) {
+  if (/\.docx$/i.test(name)) return "docx";
+  if (/\.pdf$/i.test(name)) return "pdf";
+  return "pptx";
 }
 
 function getWordPartLabel(path) {

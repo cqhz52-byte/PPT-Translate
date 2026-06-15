@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon.svg">
-    <link rel="stylesheet" href="styles.css?v=18">
+    <link rel="stylesheet" href="styles.css?v=19">
   </head>
   <body>
     <main class="shell">
@@ -16,7 +16,7 @@
         <div>
           <p class="eyebrow">PWA</p>
           <h1>DeepSeek 文档翻译工具</h1>
-          <p class="version">v18 · 预览显示图片边界</p>
+          <p class="version">v19 · 支持拖拽和 PDF 文本翻译</p>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="installButton" type="button" hidden title="安装应用" aria-label="安装应用">
@@ -31,10 +31,10 @@
       <section class="workspace" aria-label="文档翻译工作区">
         <aside class="sidebar">
           <label class="upload-zone" for="fileInput">
-            <input id="fileInput" type="file" accept=".pptx,.ppt,.docx,.doc,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword">
+            <input id="fileInput" type="file" accept=".pptx,.ppt,.docx,.doc,.pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,application/pdf">
             <span class="upload-icon" aria-hidden="true">+</span>
-            <span class="upload-title">选择 PPTX / DOCX 文件</span>
-            <span class="upload-copy" id="fileMeta">支持 PPTX / DOCX；旧版 PPT/DOC 请先另存</span>
+            <span class="upload-title">选择或拖入文档</span>
+            <span class="upload-copy" id="fileMeta">支持 PPTX / DOCX / PDF；旧版 PPT/DOC 请先另存</span>
           </label>
 
           <div class="settings">
@@ -150,6 +150,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=18" type="module"></script>
+    <script src="app.js?v=19" type="module"></script>
   </body>
 </html>
