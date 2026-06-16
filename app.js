@@ -65,7 +65,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=37").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=38").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -1237,7 +1237,7 @@ async function downloadPdfTranslation() {
   setStatus("正在嵌入译文字体...");
   await waitForUiFrame();
   const font = await pdfDoc.embedFont(fontBytes, { subset: true });
-  const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.translation.trim() && segment.layout?.bounds);
+  const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.layout?.bounds);
 
   for (let index = 0; index < translatedSegments.length; index += 1) {
     const segment = translatedSegments[index];
@@ -1283,19 +1283,15 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
         ...sourceBounds,
         width: Math.max(sourceBounds.width, Number(segment.layout.availableWidth || 0)),
         height: Math.max(sourceBounds.height, Number(segment.layout.availableHeight || 0)),
-  };
-  const text = segment.translation.trim();
+      };
   const isTableLike = Boolean(cell) || Number(segment.layout.rowSegmentCount || 1) > 1;
-  const fit = fitPdfTextSize(text, font, fitBounds, segment.layout.fontSize || 10, segment.original, segment.layout);
-  const fontSize = fit.fontSize;
-  const lines = fit.lines;
-  const lineHeight = fit.lineHeight;
-  const paddingX = isTableLike ? Math.max(1.1, fontSize * 0.12) : Math.max(2.2, fontSize * 0.18);
-  const paddingY = isTableLike ? Math.max(0.9, fontSize * 0.08) : Math.max(1.4, fontSize * 0.12);
+  const sourceFontSize = Math.max(4, Math.min(28, Number(segment.layout.fontSize || 10)));
+  const paddingX = isTableLike ? Math.max(1.4, sourceFontSize * 0.16) : Math.max(3.2, sourceFontSize * 0.28);
+  const paddingY = isTableLike ? Math.max(1.2, sourceFontSize * 0.12) : Math.max(2.2, sourceFontSize * 0.2);
+  const eraseHeight = Math.max(sourceBounds.height + paddingY * 2, sourceFontSize * (isTableLike ? 1.45 : 1.75));
   const eraseX = Math.max(0, sourceBounds.x - paddingX);
-  const eraseY = Math.max(0, sourceBounds.y - paddingY);
+  const eraseY = Math.max(0, sourceBounds.y - paddingY - Math.max(0, (eraseHeight - sourceBounds.height) / 2));
   const eraseWidth = sourceBounds.width + paddingX * 2;
-  const eraseHeight = sourceBounds.height + paddingY * 2;
   const coverColor = segment.layout.backgroundColor || { r: 1, g: 1, b: 1 };
   const textColor = segment.layout.textColor || getReadablePdfTextColor(coverColor);
 
@@ -1308,6 +1304,13 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
     opacity: 1,
   });
 
+  const text = getPdfExportText(segment);
+  if (!text) return;
+
+  const fit = fitPdfTextSize(text, font, fitBounds, segment.layout.fontSize || 10, segment.original, segment.layout);
+  const fontSize = fit.fontSize;
+  const lines = fit.lines;
+  const lineHeight = fit.lineHeight;
   const textHeight = lines.length * lineHeight;
   const fitY = isTableLike ? Math.max(0, sourceBounds.y - Math.max(0, (fitBounds.height - sourceBounds.height) / 2)) : sourceBounds.y;
   let y = fitY + Math.max(0, (fitBounds.height - textHeight) / 2) + (lines.length - 1) * lineHeight;
@@ -1323,6 +1326,22 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
     });
     y -= lineHeight;
   });
+}
+
+function getPdfExportText(segment) {
+  const text = applyTerminologyRules(String(segment.translation || "").trim(), segment.original);
+  if (!text) return "";
+
+  const direction = els.translationDirection?.value || "";
+  if ((direction === "zh-en" || direction === "auto-en") && containsHanCharacters(text)) {
+    return "";
+  }
+
+  return text;
+}
+
+function containsHanCharacters(text) {
+  return /[\u3400-\u9fff]/.test(text);
 }
 
 function drawPdfTableCellBorders(page, cells, rgb) {
