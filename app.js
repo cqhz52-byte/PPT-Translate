@@ -16,6 +16,7 @@ const state = {
   wakeLock: null,
   wakeLockNoticeShown: false,
   wakeLockWarningShown: false,
+  mobileView: "translate",
 };
 
 const els = {
@@ -30,6 +31,10 @@ const els = {
   shareButton: document.querySelector("#shareButton"),
   resetButton: document.querySelector("#resetButton"),
   installButton: document.querySelector("#installButton"),
+  workspace: document.querySelector("#workspace"),
+  mobileViewButton: document.querySelector("#mobileViewButton"),
+  mobileViewMenu: document.querySelector("#mobileViewMenu"),
+  mobileViewTargets: [...document.querySelectorAll("[data-mobile-view-target]")],
   previewDialog: document.querySelector("#previewDialog"),
   previewCloseButton: document.querySelector("#previewCloseButton"),
   previewDownloadButton: document.querySelector("#previewDownloadButton"),
@@ -74,7 +79,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=41").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=42").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -108,6 +113,31 @@ els.fileInput.addEventListener("change", async (event) => {
   }
   await loadOfficeFile(files[0]);
 });
+
+els.mobileViewButton?.addEventListener("click", () => {
+  const expanded = els.mobileViewButton.getAttribute("aria-expanded") === "true";
+  setMobileMenuOpen(!expanded);
+});
+
+els.mobileViewTargets.forEach((button) => {
+  button.addEventListener("click", () => {
+    setMobileView(button.dataset.mobileViewTarget || "translate");
+    setMobileMenuOpen(false);
+  });
+});
+
+document.addEventListener("click", (event) => {
+  if (!els.mobileViewMenu || !els.mobileViewButton) return;
+  if (els.mobileViewMenu.hidden) return;
+  if (event.target.closest(".mobile-view-switcher")) return;
+  setMobileMenuOpen(false);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setMobileMenuOpen(false);
+});
+
+setMobileView(state.mobileView);
 
 ["dragover", "drop"].forEach((eventName) => {
   document.addEventListener(eventName, (event) => {
@@ -1355,6 +1385,23 @@ function updateStats() {
     els.previewShareButton.disabled = !state.segments.length;
   }
   setProgress(state.segments.length ? translated / state.segments.length : 0);
+}
+
+function setMobileMenuOpen(isOpen) {
+  if (!els.mobileViewButton || !els.mobileViewMenu) return;
+  els.mobileViewButton.setAttribute("aria-expanded", String(isOpen));
+  els.mobileViewMenu.hidden = !isOpen;
+}
+
+function setMobileView(view) {
+  const nextView = ["translate", "settings", "output", "library"].includes(view) ? view : "translate";
+  state.mobileView = nextView;
+  if (els.workspace) els.workspace.dataset.mobileView = nextView;
+  els.mobileViewTargets.forEach((button) => {
+    const isActive = button.dataset.mobileViewTarget === nextView;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-current", isActive ? "page" : "false");
+  });
 }
 
 function setBusy(isBusy, message = "") {

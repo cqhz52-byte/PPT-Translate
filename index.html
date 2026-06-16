@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon.svg">
-    <link rel="stylesheet" href="styles.css?v=41">
+    <link rel="stylesheet" href="styles.css?v=42">
   </head>
   <body>
     <main class="shell">
@@ -17,10 +17,25 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="CuraWay">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v41 · PDF版式回退修复</p>
+            <p class="version">v42 · 手机分区管理</p>
           </div>
         </div>
         <div class="topbar-actions">
+          <div class="mobile-view-switcher">
+            <button class="icon-button mobile-view-button" id="mobileViewButton" type="button" aria-label="切换功能区" aria-expanded="false" aria-controls="mobileViewMenu">
+              <svg class="menu-icon" aria-hidden="true" viewBox="0 0 24 24">
+                <path d="M5 7h14"></path>
+                <path d="M5 12h14"></path>
+                <path d="M5 17h14"></path>
+              </svg>
+            </button>
+            <div class="mobile-view-menu" id="mobileViewMenu" hidden>
+              <button type="button" data-mobile-view-target="translate">翻译</button>
+              <button type="button" data-mobile-view-target="settings">参数</button>
+              <button type="button" data-mobile-view-target="output">输出</button>
+              <button type="button" data-mobile-view-target="library">文件库</button>
+            </div>
+          </div>
           <button class="icon-button install-button" id="installButton" type="button" hidden title="安装到桌面" aria-label="安装到桌面">
             <svg class="install-icon" aria-hidden="true" viewBox="0 0 24 24">
               <path d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"></path>
@@ -35,16 +50,16 @@
         </div>
       </header>
 
-      <section class="workspace" aria-label="文档翻译工作区">
+      <section class="workspace" id="workspace" data-mobile-view="translate" aria-label="文档翻译工作区">
         <aside class="sidebar">
-          <label class="upload-zone" for="fileInput">
+          <label class="upload-zone mobile-view-pane" data-mobile-pane="translate" for="fileInput">
             <input id="fileInput" type="file" multiple accept=".pptx,.ppt,.docx,.doc,.pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,application/pdf">
             <span class="upload-icon" aria-hidden="true">+</span>
             <span class="upload-title">选择或拖入文档</span>
             <span class="upload-copy" id="fileMeta">支持 PPTX / DOCX / PDF；旧版 PPT/DOC 请先另存</span>
           </label>
 
-          <div class="settings">
+          <div class="settings mobile-view-pane" data-mobile-pane="settings">
             <label>
               翻译方向
               <select id="translationDirection">
@@ -79,7 +94,7 @@
             </label>
           </div>
 
-          <div class="actions">
+          <div class="actions mobile-view-pane" data-mobile-pane="translate">
             <button id="batchTranslateButton" type="button" disabled>批量翻译并保存</button>
             <button id="translateButton" class="primary" type="button" disabled>自动翻译</button>
             <button id="previewButton" type="button" disabled>预览译文</button>
@@ -87,7 +102,7 @@
             <button id="shareButton" type="button" disabled>分享翻译文件</button>
           </div>
 
-          <section class="saved-files" aria-label="已保存翻译文件">
+          <section class="saved-files mobile-view-pane" data-mobile-pane="library" aria-label="已保存翻译文件">
             <div class="saved-files-head">
               <strong>已保存文件</strong>
               <span id="savedFileCount">0</span>
@@ -98,7 +113,7 @@
             </div>
           </section>
 
-          <div class="stats" aria-live="polite">
+          <div class="stats mobile-view-pane" data-mobile-pane="translate" aria-live="polite">
             <div>
               <strong id="slideCount">0</strong>
               <span>页面/部件</span>
@@ -114,7 +129,7 @@
           </div>
         </aside>
 
-        <section class="panel">
+        <section class="panel mobile-view-pane" data-mobile-pane="output">
           <div class="panel-head">
             <div class="status-copy">
               <h2>文本清单</h2>
@@ -175,6 +190,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=41" type="module"></script>
+    <script src="app.js?v=42" type="module"></script>
   </body>
 </html>
