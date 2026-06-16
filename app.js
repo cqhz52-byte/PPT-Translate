@@ -65,7 +65,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=34").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=35").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -247,19 +247,27 @@ async function loadPdfDocument(file) {
   state.slideCount = pdf.numPages;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    setProgress(pdf.numPages ? pageNumber / pdf.numPages : 0);
+    setStatus(`正在解析 PDF 第 ${pageNumber}/${pdf.numPages} 页，提取文字和页面背景...`);
+    await waitForUiFrame();
     const page = await pdf.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 1 });
     state.pdfPageSizes.set(`pdf/page-${pageNumber}`, {
       width: viewport.width || 595.28,
       height: viewport.height || 841.89,
     });
-    const content = await page.getTextContent();
     const tableCells = await extractPdfTableCells(page, pdfjs, viewport).catch(() => []);
     state.pdfTableCells.set(`pdf/page-${pageNumber}`, tableCells);
+    const pageSample = await renderPdfPageSample(page).catch((error) => {
+      console.warn("PDF background sampling failed", error);
+      return null;
+    });
+    const content = await page.getTextContent();
     const lines = extractPdfLineSegments(content.items, viewport.width || 595.28);
 
     lines.forEach((line, index) => {
       const tableCell = findPdfTableCell(line.bounds, tableCells);
+      const backgroundColor = samplePdfBackgroundColor(pageSample, line.bounds, viewport.width || 595.28, viewport.height || 841.89);
       state.segments.push({
         id: `pdf-${pageNumber}-${index}`,
         type: "pdf",
@@ -276,6 +284,8 @@ async function loadPdfDocument(file) {
           rowSegmentCount: tableCell ? Math.max(2, line.rowSegmentCount) : line.rowSegmentCount,
           tableCell,
           cellAlign: tableCell ? inferPdfCellAlign(line.bounds, tableCell, line.text) : "",
+          backgroundColor,
+          textColor: getReadablePdfTextColor(backgroundColor),
         },
         overrides: createSegmentOverrides(),
         original: line.text,
@@ -297,6 +307,72 @@ async function loadPdfJs() {
 
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
   return window.pdfjsLib;
+}
+
+async function renderPdfPageSample(page) {
+  const scale = 0.72;
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(viewport.width));
+  canvas.height = Math.max(1, Math.ceil(viewport.height));
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+
+  await page.render({ canvasContext: context, viewport }).promise;
+  return { canvas, context, scale };
+}
+
+function samplePdfBackgroundColor(sample, bounds, pageWidth, pageHeight) {
+  if (!sample || !bounds) return { r: 1, g: 1, b: 1 };
+
+  const { context, canvas, scale } = sample;
+  const pad = 3;
+  const x = clampNumber((bounds.x - pad) * scale, 0, canvas.width - 1);
+  const y = clampNumber((pageHeight - bounds.y - bounds.height - pad) * scale, 0, canvas.height - 1);
+  const width = clampNumber((bounds.width + pad * 2) * scale, 1, canvas.width - x);
+  const height = clampNumber((bounds.height + pad * 2) * scale, 1, canvas.height - y);
+
+  try {
+    const image = context.getImageData(Math.floor(x), Math.floor(y), Math.ceil(width), Math.ceil(height));
+    const pixels = image.data;
+    const reds = [];
+    const greens = [];
+    const blues = [];
+    const step = Math.max(4, Math.floor((pixels.length / 4) / 180));
+
+    for (let index = 0; index < pixels.length; index += step * 4) {
+      reds.push(pixels[index]);
+      greens.push(pixels[index + 1]);
+      blues.push(pixels[index + 2]);
+    }
+
+    return {
+      r: medianByte(reds) / 255,
+      g: medianByte(greens) / 255,
+      b: medianByte(blues) / 255,
+    };
+  } catch (error) {
+    console.warn("PDF background sample unavailable", error);
+    return { r: 1, g: 1, b: 1 };
+  }
+}
+
+function medianByte(values) {
+  if (!values.length) return 255;
+  values.sort((a, b) => a - b);
+  return values[Math.floor(values.length / 2)];
+}
+
+function getReadablePdfTextColor(background) {
+  const color = background || { r: 1, g: 1, b: 1 };
+  const luminance = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+  return luminance < 0.48 ? { r: 0.96, g: 0.97, b: 0.98 } : { r: 0.06, g: 0.08, b: 0.09 };
+}
+
+function clampNumber(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.max(min, Math.min(max, number));
 }
 
 async function extractPdfTableCells(page, pdfjs, viewport) {
@@ -769,9 +845,15 @@ async function downloadPresentation() {
 async function sharePresentation() {
   if (!state.file) return;
 
+  let fallbackBlob = null;
+  let fallbackFilename = "";
   try {
     setBusy(true, `正在生成可分享的 ${getFileTypeName()}...`);
     const { blob, filename } = await generateTranslatedFile();
+    fallbackBlob = blob;
+    fallbackFilename = filename;
+    setStatus("File ready. Opening system share panel...");
+    await waitForUiFrame();
     const file = new File([blob], filename, { type: blob.type || getOutputMimeType() });
 
     if (navigator.canShare?.({ files: [file] })) {
@@ -787,6 +869,11 @@ async function sharePresentation() {
     saveBlobAsFile(blob, filename);
     showToast("当前浏览器不支持直接分享文件，已先下载翻译文件，可从微信或文件管理器转发。", true);
   } catch (error) {
+    if (error?.name !== "AbortError" && fallbackBlob) {
+      saveBlobAsFile(fallbackBlob, fallbackFilename);
+      showToast("Share panel could not open. The translated file has been downloaded instead.", true);
+      return;
+    }
     if (error?.name === "AbortError") {
       showToast("已取消分享。");
     } else {
@@ -835,10 +922,13 @@ function saveBlobAsFile(blob, filename) {
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.style.display = "none";
   document.body.append(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
 function getOutputMimeType() {
@@ -1094,7 +1184,7 @@ async function downloadPdfTranslation() {
   setProgress(0.9);
   setStatus("正在保存翻译版 PDF，文件较大时可能需要几十秒...");
   await waitForUiFrame();
-  setProgress(0.86);
+  setProgress(0.91);
   setStatus("正在重新绘制 PDF 表格线，修复文字覆盖造成的断线...");
   await waitForUiFrame();
   pages.forEach((page, index) => {
@@ -1102,6 +1192,10 @@ async function downloadPdfTranslation() {
     drawPdfTableCellBorders(page, cells, rgb);
   });
 
+  setProgress(0.94);
+  setStatus("Saving translated PDF. On mobile this may take 30-90 seconds; keep this page open...");
+  await waitForUiFrame();
+  await delay(80);
   const pdfBytes = await pdfDoc.save();
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
   setProgress(1);
@@ -1131,13 +1225,15 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
   const eraseY = Math.max(0, sourceBounds.y - paddingY);
   const eraseWidth = sourceBounds.width + paddingX * 2;
   const eraseHeight = sourceBounds.height + paddingY * 2;
+  const coverColor = segment.layout.backgroundColor || { r: 1, g: 1, b: 1 };
+  const textColor = segment.layout.textColor || getReadablePdfTextColor(coverColor);
 
   page.drawRectangle({
     x: eraseX,
     y: eraseY,
     width: eraseWidth,
     height: eraseHeight,
-    color: rgb(1, 1, 1),
+    color: rgb(coverColor.r, coverColor.g, coverColor.b),
     opacity: 1,
   });
 
@@ -1152,7 +1248,7 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
       y,
       size: fontSize,
       font,
-      color: rgb(0.06, 0.08, 0.09),
+      color: rgb(textColor.r, textColor.g, textColor.b),
     });
     y -= lineHeight;
   });
@@ -1561,6 +1657,10 @@ function waitForUiFrame() {
   return new Promise((resolve) => {
     requestAnimationFrame(() => setTimeout(resolve, 0));
   });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function resetApp(clearInput = true) {
