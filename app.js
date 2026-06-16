@@ -65,7 +65,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=35").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=36").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -320,6 +320,43 @@ async function renderPdfPageSample(page) {
 
   await page.render({ canvasContext: context, viewport }).promise;
   return { canvas, context, scale };
+}
+
+async function renderPdfPageBackgroundForExport(page, pdfDoc, pageSize) {
+  const width = pageSize.width || 595.28;
+  const height = pageSize.height || 841.89;
+  const maxPixels = isLikelyMobileDevice() ? 2600000 : 4200000;
+  const scale = Math.max(1.35, Math.min(2.2, Math.sqrt(maxPixels / Math.max(1, width * height))));
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(viewport.width));
+  canvas.height = Math.max(1, Math.ceil(viewport.height));
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("Canvas unavailable for PDF export.");
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: context, viewport }).promise;
+  const bytes = await canvasToArrayBuffer(canvas, "image/jpeg", 0.94);
+  canvas.width = 1;
+  canvas.height = 1;
+  return { image: await pdfDoc.embedJpg(bytes), width, height };
+}
+
+function canvasToArrayBuffer(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("PDF page rendering failed."));
+        return;
+      }
+      blob.arrayBuffer().then(resolve, reject);
+    }, type, quality);
+  });
+}
+
+function isLikelyMobileDevice() {
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || Math.min(window.innerWidth, window.innerHeight) < 760;
 }
 
 function samplePdfBackgroundColor(sample, bounds, pageWidth, pageHeight) {
@@ -1157,15 +1194,36 @@ async function downloadPdfTranslation() {
   setProgress(0.18);
   setStatus("正在打开原始 PDF，并保留图片、表格和页面结构...");
   await waitForUiFrame();
-  const pdfDoc = await PDFDocument.load(state.pdfBytes);
+  const pdfjs = await loadPdfJs();
+  const sourcePdf = await pdfjs.getDocument({ data: state.pdfBytes.slice() }).promise;
+  const pdfDoc = await PDFDocument.create();
   pdfDoc.registerFontkit(fontkit);
   pdfDoc.setTitle(`${state.file.name} translated`);
+  const pages = [];
 
-  setProgress(0.28);
+  for (let pageNumber = 1; pageNumber <= sourcePdf.numPages; pageNumber += 1) {
+    const sourcePage = await sourcePdf.getPage(pageNumber);
+    const pageSize = state.pdfPageSizes.get(`pdf/page-${pageNumber}`) || sourcePage.getViewport({ scale: 1 });
+    const page = pdfDoc.addPage([pageSize.width || 595.28, pageSize.height || 841.89]);
+    const background = await renderPdfPageBackgroundForExport(sourcePage, pdfDoc, pageSize);
+    page.drawImage(background.image, {
+      x: 0,
+      y: 0,
+      width: pageSize.width || background.width,
+      height: pageSize.height || background.height,
+    });
+    pages.push(page);
+
+    const ratio = sourcePdf.numPages ? pageNumber / sourcePdf.numPages : 1;
+    setProgress(0.18 + ratio * 0.22);
+    setStatus(`正在生成高清页面背景：${pageNumber}/${sourcePdf.numPages}`);
+    await waitForUiFrame();
+  }
+
+  setProgress(0.43);
   setStatus("正在嵌入译文字体...");
   await waitForUiFrame();
   const font = await pdfDoc.embedFont(fontBytes, { subset: true });
-  const pages = pdfDoc.getPages();
   const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.translation.trim() && segment.layout?.bounds);
 
   for (let index = 0; index < translatedSegments.length; index += 1) {
@@ -1175,7 +1233,7 @@ async function downloadPdfTranslation() {
 
     if (index % 12 === 0 || index === translatedSegments.length - 1) {
       const ratio = translatedSegments.length ? (index + 1) / translatedSegments.length : 1;
-      setProgress(0.32 + ratio * 0.5);
+      setProgress(0.45 + ratio * 0.38);
       setStatus(`正在回写 PDF 译文：${index + 1}/${translatedSegments.length} 段，请勿关闭页面。`);
       await waitForUiFrame();
     }
@@ -1212,15 +1270,15 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
         ...sourceBounds,
         width: Math.max(sourceBounds.width, Number(segment.layout.availableWidth || 0)),
         height: Math.max(sourceBounds.height, Number(segment.layout.availableHeight || 0)),
-      };
+  };
   const text = segment.translation.trim();
-  const paddingX = 0.7;
-  const paddingY = 0.7;
   const isTableLike = Boolean(cell) || Number(segment.layout.rowSegmentCount || 1) > 1;
   const fit = fitPdfTextSize(text, font, fitBounds, segment.layout.fontSize || 10, segment.original, segment.layout);
   const fontSize = fit.fontSize;
   const lines = fit.lines;
   const lineHeight = fit.lineHeight;
+  const paddingX = isTableLike ? Math.max(1.1, fontSize * 0.12) : Math.max(2.2, fontSize * 0.18);
+  const paddingY = isTableLike ? Math.max(0.9, fontSize * 0.08) : Math.max(1.4, fontSize * 0.12);
   const eraseX = Math.max(0, sourceBounds.x - paddingX);
   const eraseY = Math.max(0, sourceBounds.y - paddingY);
   const eraseWidth = sourceBounds.width + paddingX * 2;
