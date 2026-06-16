@@ -74,7 +74,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=40").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=41").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -1591,16 +1591,18 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
       };
   const isTableLike = Boolean(cell) || Number(segment.layout.rowSegmentCount || 1) > 1;
   const sourceFontSize = Math.max(4, Math.min(28, Number(segment.layout.fontSize || 10)));
-  const paddingX = isTableLike ? Math.max(1.4, sourceFontSize * 0.16) : Math.max(3.2, sourceFontSize * 0.28);
-  const paddingY = isTableLike ? Math.max(1.2, sourceFontSize * 0.12) : Math.max(2.2, sourceFontSize * 0.2);
-  const eraseBaseX = sourceHasHan ? Math.min(sourceBounds.x, fitBounds.x) : sourceBounds.x;
-  const eraseBaseY = sourceHasHan ? Math.min(sourceBounds.y, fitBounds.y) : sourceBounds.y;
-  const eraseRight = sourceHasHan ? Math.max(sourceBounds.x + sourceBounds.width, fitBounds.x + fitBounds.width) : sourceBounds.x + sourceBounds.width;
-  const eraseTop = sourceHasHan ? Math.max(sourceBounds.y + sourceBounds.height, fitBounds.y + fitBounds.height) : sourceBounds.y + sourceBounds.height;
-  const eraseHeight = Math.max(eraseTop - eraseBaseY + paddingY * 2, sourceFontSize * (isTableLike ? 1.7 : 2.05));
-  const eraseX = Math.max(0, eraseBaseX - paddingX);
-  const eraseY = Math.max(0, eraseBaseY - paddingY - Math.max(0, (eraseHeight - (eraseTop - eraseBaseY)) / 2));
-  const eraseWidth = Math.max(2, eraseRight - eraseBaseX + paddingX * 2);
+  const paddingX = isTableLike ? Math.max(1.2, sourceFontSize * 0.12) : Math.max(2, sourceFontSize * 0.16);
+  const paddingY = isTableLike ? Math.max(1, sourceFontSize * 0.1) : Math.max(1.5, sourceFontSize * 0.12);
+  const eraseWidth = Math.max(2, sourceBounds.width + paddingX * 2);
+  const eraseHeight = Math.max(
+    sourceBounds.height + paddingY * 2,
+    sourceFontSize * (isTableLike ? 1.35 : 1.55)
+  );
+  const eraseX = Math.max(0, sourceBounds.x - paddingX);
+  const eraseY = Math.max(
+    0,
+    sourceBounds.y - paddingY - Math.max(0, (eraseHeight - sourceBounds.height) / 2)
+  );
   const coverColor = segment.layout.backgroundColor || { r: 1, g: 1, b: 1 };
   const textColor = segment.layout.textColor || getReadablePdfTextColor(coverColor);
 
@@ -1730,7 +1732,7 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout 
 }
 
 function getPdfLineHeight(size, isTableLike) {
-  return size * (isTableLike ? 1.16 : 1.22);
+  return size * (isTableLike ? 1.18 : 1.28);
 }
 
 async function loadPdfExportTools() {
