@@ -9,6 +9,9 @@ const state = {
   pdfPageSizes: new Map(),
   pdfTableCells: new Map(),
   pdfBytes: null,
+  batchFiles: [],
+  batchRunning: false,
+  savedFiles: [],
   installPrompt: null,
   wakeLock: null,
   wakeLockNoticeShown: false,
@@ -21,6 +24,7 @@ const els = {
   fileMeta: document.querySelector("#fileMeta"),
   segmentTable: document.querySelector("#segmentTable"),
   translateButton: document.querySelector("#translateButton"),
+  batchTranslateButton: document.querySelector("#batchTranslateButton"),
   previewButton: document.querySelector("#previewButton"),
   downloadButton: document.querySelector("#downloadButton"),
   shareButton: document.querySelector("#shareButton"),
@@ -44,6 +48,9 @@ const els = {
   statusText: document.querySelector("#statusText"),
   statusVisual: document.querySelector("#statusVisual"),
   progressFill: document.querySelector("#progressFill"),
+  batchQueue: document.querySelector("#batchQueue"),
+  savedFileList: document.querySelector("#savedFileList"),
+  savedFileCount: document.querySelector("#savedFileCount"),
 };
 
 const slidePathPattern = /^ppt\/slides\/slide(\d+)\.xml$/;
@@ -52,6 +59,8 @@ const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
 const SETTINGS_VERSION = 5;
+const SAVED_FILES_DB = "curaway-translated-files-v1";
+const SAVED_FILES_STORE = "files";
 const DEEPSEEK_API_BASE = "https://api.deepseek.com";
 const TRANSLATE_PROXY = "./api/translate";
 const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
@@ -65,7 +74,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=39").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=40").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -91,9 +100,13 @@ els.installButton.addEventListener("click", async () => {
 });
 
 els.fileInput.addEventListener("change", async (event) => {
-  const [file] = event.target.files;
-  if (!file) return;
-  await loadOfficeFile(file);
+  const files = [...(event.target.files || [])];
+  if (!files.length) return;
+  if (files.length > 1) {
+    queueBatchFiles(files);
+    return;
+  }
+  await loadOfficeFile(files[0]);
 });
 
 ["dragover", "drop"].forEach((eventName) => {
@@ -113,14 +126,19 @@ els.fileInput.addEventListener("change", async (event) => {
   els.uploadZone.addEventListener(eventName, (event) => {
     event.preventDefault();
     if (eventName === "drop") {
-      const [file] = event.dataTransfer?.files || [];
-      if (file) loadOfficeFile(file);
+      const files = [...(event.dataTransfer?.files || [])];
+      if (files.length > 1) {
+        queueBatchFiles(files);
+      } else if (files[0]) {
+        loadOfficeFile(files[0]);
+      }
     }
     els.uploadZone.classList.remove("drag-over");
   });
 });
 
 els.translateButton.addEventListener("click", translateAll);
+els.batchTranslateButton?.addEventListener("click", processBatchQueue);
 els.previewButton.addEventListener("click", openPreview);
 els.downloadButton.addEventListener("click", downloadPresentation);
 els.shareButton.addEventListener("click", sharePresentation);
@@ -144,8 +162,12 @@ els.previewDialog.addEventListener("click", (event) => {
 });
 
 updateFontScaleLabel();
+loadSavedFiles().catch((error) => {
+  console.warn("Saved file list unavailable", error);
+});
 
-async function loadOfficeFile(file) {
+async function loadOfficeFile(file, options = {}) {
+  const silent = Boolean(options.silent);
   try {
     if (/\.ppt$/i.test(file.name) && !/\.pptx$/i.test(file.name)) {
       throw new Error("当前网页版只能可靠解析和回写 PPTX。请先用 PowerPoint/WPS 将 .ppt 另存为 .pptx。");
@@ -864,12 +886,106 @@ async function translateText({ apiBase, apiProxy, apiKey, model, direction, text
   return normalizeTranslation(data.translation || "", text);
 }
 
+function queueBatchFiles(files) {
+  const supported = files.filter((file) => /\.(pptx|docx|pdf)$/i.test(file.name));
+  const skipped = files.length - supported.length;
+  state.batchFiles = supported;
+  renderBatchQueue();
+  updateBatchButton();
+
+  if (supported.length) {
+    setStatus(`已加入 ${supported.length} 个批量文件。点击“批量翻译并保存”开始处理。`);
+  }
+  if (skipped) {
+    showToast(`${skipped} 个文件格式暂不支持，已跳过。`, true);
+  }
+}
+
+function renderBatchQueue() {
+  if (!els.batchQueue) return;
+  els.batchQueue.hidden = !state.batchFiles.length;
+  if (!state.batchFiles.length) {
+    els.batchQueue.replaceChildren();
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  const title = document.createElement("strong");
+  title.textContent = `待批量处理：${state.batchFiles.length} 个`;
+  fragment.append(title);
+
+  state.batchFiles.forEach((file) => {
+    const item = document.createElement("div");
+    item.className = "batch-file";
+    item.textContent = file.name;
+    fragment.append(item);
+  });
+
+  els.batchQueue.replaceChildren(fragment);
+}
+
+function updateBatchButton() {
+  if (!els.batchTranslateButton) return;
+  els.batchTranslateButton.disabled = !state.batchFiles.length || state.batchRunning || document.body.classList.contains("is-busy");
+}
+
+async function processBatchQueue() {
+  if (!state.batchFiles.length) return;
+
+  const apiKey = els.apiKey.value.trim();
+  const model = els.modelName.value.trim();
+  if (!apiKey || !model) {
+    showToast("请先填写模型和 API Key。", true);
+    return;
+  }
+
+  const files = [...state.batchFiles];
+  const saved = [];
+  const failed = [];
+  state.batchRunning = true;
+
+  try {
+    setBusy(true, `正在批量翻译 0/${files.length}...`);
+
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      setProgress(index / files.length);
+      setStatus(`批量处理中：${index + 1}/${files.length} · ${file.name}`);
+      await waitForUiFrame();
+
+      try {
+        await loadOfficeFile(file);
+        await translateAll();
+        const { blob, filename } = await generateTranslatedFile();
+        await saveGeneratedFile(blob, filename);
+        saved.push(filename);
+      } catch (error) {
+        console.error("Batch file failed", file.name, error);
+        failed.push(file.name);
+      }
+    }
+
+    state.batchFiles = [];
+    renderBatchQueue();
+    updateBatchButton();
+    await loadSavedFiles();
+    setProgress(1);
+    setStatus(`批量完成：成功 ${saved.length} 个，失败 ${failed.length} 个。`);
+    showToast(`批量翻译完成，已保存 ${saved.length} 个文件。${failed.length ? `失败 ${failed.length} 个。` : ""}`, Boolean(failed.length));
+  } finally {
+    state.batchRunning = false;
+    setBusy(false);
+    updateBatchButton();
+  }
+}
+
 async function downloadPresentation() {
   if (!state.file) return;
 
   try {
     setBusy(true, `正在生成 ${getFileTypeName()}...`);
     const { blob, filename } = await generateTranslatedFile();
+    await saveGeneratedFile(blob, filename);
     saveBlobAsFile(blob, filename);
     showToast(`已生成翻译版 ${getFileTypeName()}。`);
   } catch (error) {
@@ -887,6 +1003,7 @@ async function sharePresentation() {
   try {
     setBusy(true, `正在生成可分享的 ${getFileTypeName()}...`);
     const { blob, filename } = await generateTranslatedFile();
+    await saveGeneratedFile(blob, filename);
     fallbackBlob = blob;
     fallbackFilename = filename;
     setStatus("File ready. Opening system share panel...");
@@ -965,6 +1082,184 @@ function normalizeAllTranslations() {
       updateTextarea(segment);
     }
   });
+}
+
+async function saveGeneratedFile(blob, filename) {
+  const record = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    filename,
+    type: blob.type || getOutputMimeType(),
+    size: blob.size,
+    createdAt: new Date().toISOString(),
+    blob,
+  };
+
+  state.savedFiles = [record, ...state.savedFiles].slice(0, 30);
+  renderSavedFiles();
+
+  try {
+    const db = await openSavedFilesDb();
+    await idbPut(db, record);
+  } catch (error) {
+    console.warn("Saved file persistence failed", error);
+  }
+
+  return record;
+}
+
+async function loadSavedFiles() {
+  try {
+    const db = await openSavedFilesDb();
+    state.savedFiles = (await idbGetAll(db)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  } catch (error) {
+    console.warn("Saved files unavailable", error);
+    state.savedFiles = [];
+  }
+  renderSavedFiles();
+}
+
+function renderSavedFiles() {
+  if (!els.savedFileList) return;
+  els.savedFileCount && (els.savedFileCount.textContent = String(state.savedFiles.length));
+  els.savedFileList.replaceChildren();
+
+  if (!state.savedFiles.length) {
+    const empty = document.createElement("p");
+    empty.className = "saved-empty";
+    empty.textContent = "生成后的文件会保存在这里，可再次下载或分享。";
+    els.savedFileList.append(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  state.savedFiles.forEach((record) => {
+    const item = document.createElement("article");
+    item.className = "saved-file";
+
+    const meta = document.createElement("div");
+    meta.className = "saved-file-meta";
+    const name = document.createElement("strong");
+    name.textContent = record.filename;
+    const detail = document.createElement("span");
+    detail.textContent = `${formatBytes(record.size)} · ${formatSavedTime(record.createdAt)}`;
+    meta.append(name, detail);
+
+    const actions = document.createElement("div");
+    actions.className = "saved-file-actions";
+    const download = document.createElement("button");
+    download.type = "button";
+    download.textContent = "下载";
+    download.addEventListener("click", () => downloadSavedFile(record.id));
+    const share = document.createElement("button");
+    share.type = "button";
+    share.textContent = "分享";
+    share.addEventListener("click", () => shareSavedFile(record.id));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "删除";
+    remove.addEventListener("click", () => deleteSavedFile(record.id));
+    actions.append(download, share, remove);
+
+    item.append(meta, actions);
+    fragment.append(item);
+  });
+
+  els.savedFileList.append(fragment);
+}
+
+function getSavedRecord(id) {
+  return state.savedFiles.find((record) => record.id === id);
+}
+
+async function downloadSavedFile(id) {
+  const record = getSavedRecord(id);
+  if (!record) return;
+  saveBlobAsFile(record.blob, record.filename);
+}
+
+async function shareSavedFile(id) {
+  const record = getSavedRecord(id);
+  if (!record) return;
+  await shareBlobFile(record.blob, record.filename, record.type);
+}
+
+async function deleteSavedFile(id) {
+  state.savedFiles = state.savedFiles.filter((record) => record.id !== id);
+  renderSavedFiles();
+  try {
+    const db = await openSavedFilesDb();
+    await idbDelete(db, id);
+  } catch (error) {
+    console.warn("Saved file delete failed", error);
+  }
+}
+
+async function shareBlobFile(blob, filename, type = "") {
+  const file = new File([blob], filename, { type: type || blob.type || getOutputMimeType() });
+  if (navigator.canShare?.({ files: [file] })) {
+    await navigator.share({
+      files: [file],
+      title: filename,
+      text: "CuraWay 文档翻译工具生成的翻译文件",
+    });
+    showToast("已打开系统分享面板。");
+    return;
+  }
+
+  saveBlobAsFile(blob, filename);
+  showToast("当前浏览器不支持直接分享文件，已先下载文件。", true);
+}
+
+function openSavedFilesDb() {
+  return new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) {
+      reject(new Error("IndexedDB unavailable"));
+      return;
+    }
+    const request = indexedDB.open(SAVED_FILES_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(SAVED_FILES_STORE)) {
+        db.createObjectStore(SAVED_FILES_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function idbPut(db, record) {
+  return idbRequest(db, "readwrite", (store) => store.put(record));
+}
+
+function idbGetAll(db) {
+  return idbRequest(db, "readonly", (store) => store.getAll());
+}
+
+function idbDelete(db, id) {
+  return idbRequest(db, "readwrite", (store) => store.delete(id));
+}
+
+function idbRequest(db, mode, action) {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(SAVED_FILES_STORE, mode);
+    const request = action(transaction.objectStore(SAVED_FILES_STORE));
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    transaction.onerror = () => reject(transaction.error);
+  });
+}
+
+function formatBytes(bytes = 0) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatSavedTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function saveBlobAsFile(blob, filename) {
@@ -1052,6 +1347,7 @@ function updateStats() {
   els.previewButton.disabled = !state.segments.length;
   els.downloadButton.disabled = !state.segments.length;
   els.shareButton.disabled = !state.segments.length;
+  updateBatchButton();
   if (els.previewDownloadButton) {
     els.previewDownloadButton.disabled = !state.segments.length;
   }
@@ -1062,22 +1358,26 @@ function updateStats() {
 }
 
 function setBusy(isBusy, message = "") {
-  els.translateButton.disabled = isBusy || !state.segments.length;
-  els.previewButton.disabled = isBusy || !state.segments.length;
-  els.downloadButton.disabled = isBusy || !state.segments.length;
-  els.shareButton.disabled = isBusy || !state.segments.length;
+  const effectiveBusy = isBusy || state.batchRunning;
+  els.translateButton.disabled = effectiveBusy || !state.segments.length;
+  els.previewButton.disabled = effectiveBusy || !state.segments.length;
+  els.downloadButton.disabled = effectiveBusy || !state.segments.length;
+  els.shareButton.disabled = effectiveBusy || !state.segments.length;
+  if (els.batchTranslateButton) {
+    els.batchTranslateButton.disabled = effectiveBusy || !state.batchFiles.length;
+  }
   if (els.previewDownloadButton) {
-    els.previewDownloadButton.disabled = isBusy || !state.segments.length;
+    els.previewDownloadButton.disabled = effectiveBusy || !state.segments.length;
   }
   if (els.previewShareButton) {
-    els.previewShareButton.disabled = isBusy || !state.segments.length;
+    els.previewShareButton.disabled = effectiveBusy || !state.segments.length;
   }
-  els.fileInput.disabled = isBusy;
-  document.body.classList.toggle("is-busy", isBusy);
+  els.fileInput.disabled = effectiveBusy;
+  document.body.classList.toggle("is-busy", effectiveBusy);
   if (els.statusVisual) {
-    els.statusVisual.classList.toggle("active", isBusy);
+    els.statusVisual.classList.toggle("active", effectiveBusy);
   }
-  if (isBusy) {
+  if (effectiveBusy) {
     requestScreenWakeLock();
   } else {
     releaseScreenWakeLock();

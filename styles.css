@@ -301,6 +301,107 @@ textarea:focus {
   gap: 10px;
 }
 
+.saved-files {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(238, 244, 242, 0.72);
+}
+
+.saved-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.saved-files-head span {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.batch-queue,
+.saved-file-list {
+  display: grid;
+  gap: 8px;
+}
+
+.batch-queue {
+  padding: 10px;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.batch-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.saved-file {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.saved-file-meta {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.saved-file-meta strong,
+.saved-file-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-file-meta strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.saved-file-meta span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.saved-file-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.saved-file-actions button {
+  min-height: 34px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 .primary {
   background: var(--accent);
   border-color: var(--accent);
