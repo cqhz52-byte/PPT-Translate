@@ -65,7 +65,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=38").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=39").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -1277,6 +1277,11 @@ async function downloadPdfTranslation() {
 function drawPdfOverlayTranslation(page, segment, font, rgb) {
   const sourceBounds = segment.layout.bounds;
   const cell = segment.layout.tableCell;
+  const direction = els.translationDirection?.value || "";
+  const sourceHasHan = containsHanCharacters(segment.original || "");
+  const isEnglishExport = direction === "zh-en" || direction === "auto-en";
+  if (isEnglishExport && !sourceHasHan) return;
+
   const fitBounds = cell
     ? { x: cell.x + 2, y: cell.y + 2, width: Math.max(4, cell.width - 4), height: Math.max(4, cell.height - 4) }
     : {
@@ -1288,10 +1293,14 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
   const sourceFontSize = Math.max(4, Math.min(28, Number(segment.layout.fontSize || 10)));
   const paddingX = isTableLike ? Math.max(1.4, sourceFontSize * 0.16) : Math.max(3.2, sourceFontSize * 0.28);
   const paddingY = isTableLike ? Math.max(1.2, sourceFontSize * 0.12) : Math.max(2.2, sourceFontSize * 0.2);
-  const eraseHeight = Math.max(sourceBounds.height + paddingY * 2, sourceFontSize * (isTableLike ? 1.45 : 1.75));
-  const eraseX = Math.max(0, sourceBounds.x - paddingX);
-  const eraseY = Math.max(0, sourceBounds.y - paddingY - Math.max(0, (eraseHeight - sourceBounds.height) / 2));
-  const eraseWidth = sourceBounds.width + paddingX * 2;
+  const eraseBaseX = sourceHasHan ? Math.min(sourceBounds.x, fitBounds.x) : sourceBounds.x;
+  const eraseBaseY = sourceHasHan ? Math.min(sourceBounds.y, fitBounds.y) : sourceBounds.y;
+  const eraseRight = sourceHasHan ? Math.max(sourceBounds.x + sourceBounds.width, fitBounds.x + fitBounds.width) : sourceBounds.x + sourceBounds.width;
+  const eraseTop = sourceHasHan ? Math.max(sourceBounds.y + sourceBounds.height, fitBounds.y + fitBounds.height) : sourceBounds.y + sourceBounds.height;
+  const eraseHeight = Math.max(eraseTop - eraseBaseY + paddingY * 2, sourceFontSize * (isTableLike ? 1.7 : 2.05));
+  const eraseX = Math.max(0, eraseBaseX - paddingX);
+  const eraseY = Math.max(0, eraseBaseY - paddingY - Math.max(0, (eraseHeight - (eraseTop - eraseBaseY)) / 2));
+  const eraseWidth = Math.max(2, eraseRight - eraseBaseX + paddingX * 2);
   const coverColor = segment.layout.backgroundColor || { r: 1, g: 1, b: 1 };
   const textColor = segment.layout.textColor || getReadablePdfTextColor(coverColor);
 
@@ -1380,10 +1389,10 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout 
   const isTableLike = Number(layout?.rowSegmentCount || 1) > 1;
   const preferred = sourceFontSize;
   const targetWidth = Math.max(4, bounds.width);
-  const maxHeight = Math.max(5, bounds.height * (isTableLike ? 1.04 : 1.35));
+  const maxHeight = Math.max(5, bounds.height * (isTableLike ? 1.12 : 1.55));
 
   if (!isTableLike) {
-    const lineHeight = preferred * 1.12;
+    const lineHeight = getPdfLineHeight(preferred, false);
     const lines = wrapPdfText(text, font, preferred, targetWidth);
     return { fontSize: preferred, lines, lineHeight };
   }
@@ -1394,7 +1403,7 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout 
   const estimatedSize = Math.min(preferred, (preferred * targetWidth) / textWidthAtPreferred);
 
   for (let size = preferred; size >= minSize; size -= 0.25) {
-    const lineHeight = size * 1.12;
+    const lineHeight = getPdfLineHeight(size, true);
     const lines = wrapPdfText(text, font, size, targetWidth);
     if (lines.length * lineHeight <= maxHeight) {
       return { fontSize: size, lines, lineHeight };
@@ -1402,7 +1411,7 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout 
   }
 
   for (let size = estimatedSize; size >= minSize; size -= 0.25) {
-    const lineHeight = size * 1.12;
+    const lineHeight = getPdfLineHeight(size, true);
     const lines = wrapPdfText(text, font, size, targetWidth);
     if (lines.length * lineHeight <= maxHeight) {
       return { fontSize: size, lines, lineHeight };
@@ -1410,14 +1419,18 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout 
   }
 
   for (let size = minSize; size >= 3.6; size -= 0.2) {
-    const lineHeight = size * 1.12;
+    const lineHeight = getPdfLineHeight(size, true);
     const lines = wrapPdfText(text, font, size, targetWidth);
     if (lines.length * lineHeight <= maxHeight) {
       return { fontSize: size, lines, lineHeight };
     }
   }
 
-  return { fontSize: minSize, lines: [text], lineHeight: minSize * 1.12 };
+  return { fontSize: minSize, lines: [text], lineHeight: getPdfLineHeight(minSize, true) };
+}
+
+function getPdfLineHeight(size, isTableLike) {
+  return size * (isTableLike ? 1.16 : 1.22);
 }
 
 async function loadPdfExportTools() {
