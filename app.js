@@ -65,7 +65,7 @@ const serializer = new XMLSerializer();
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=36").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=37").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -897,7 +897,7 @@ async function sharePresentation() {
       await navigator.share({
         files: [file],
         title: filename,
-        text: "Curaway 文档翻译工具生成的翻译文件",
+        text: "CuraWay 文档翻译工具生成的翻译文件",
       });
       showToast("已打开系统分享面板。");
       return;
@@ -923,6 +923,8 @@ async function sharePresentation() {
 
 async function generateTranslatedFile() {
   if (!state.file) throw new Error("请先选择文件。");
+
+  normalizeAllTranslations();
 
   if (state.fileType === "pdf") {
     const blob = await downloadPdfTranslation();
@@ -952,6 +954,17 @@ async function generateTranslatedFile() {
   });
 
   return { blob, filename: buildOutputName(state.file.name) };
+}
+
+function normalizeAllTranslations() {
+  state.segments.forEach((segment) => {
+    if (!segment.translation) return;
+    const normalized = applyTerminologyRules(segment.translation, segment.original);
+    if (normalized !== segment.translation) {
+      segment.translation = normalized;
+      updateTextarea(segment);
+    }
+  });
 }
 
 function saveBlobAsFile(blob, filename) {
@@ -1745,8 +1758,32 @@ function buildOutputName(name) {
 function normalizeTranslation(translation, source) {
   const clean = translation.trim();
   if (looksLikeNonTranslation(clean, source)) return "";
-  if (/[\r\n]/.test(source)) return clean;
-  return clean.replace(/\s*[\r\n]+\s*/g, " ").replace(/[ \t]{2,}/g, " ");
+  const normalized = /[\r\n]/.test(source)
+    ? clean
+    : clean.replace(/\s*[\r\n]+\s*/g, " ").replace(/[ \t]{2,}/g, " ");
+  return applyTerminologyRules(normalized, source);
+}
+
+function applyTerminologyRules(text, source = "") {
+  if (!text) return text;
+
+  let normalized = text
+    .replace(/\bCura\s*way\b/gi, "CuraWay")
+    .replace(/\bCuraway\b/g, "CuraWay")
+    .replace(/\bCURAWAY\b/g, "CuraWay")
+    .replace(/\bGanavi\b/gi, "CuraWay")
+    .replace(/\bGanawei\b/gi, "CuraWay")
+    .replace(/\bGanaiwei\b/gi, "CuraWay")
+    .replace(/\bJianaiwei\b/gi, "CuraWay")
+    .replace(/\bJia\s*Nai\s*Wei\b/gi, "CuraWay");
+
+  if (/伽奈维/.test(source)) {
+    normalized = normalized
+      .replace(/\bZhejiang\s+(?:CuraWay|Ganavi|Ganawei|Ganaiwei|Jianaiwei|Jia\s*Nai\s*Wei)\s+Medical\s+Technology\s+Co\.?,?\s*Ltd\.?/gi, "Zhejiang CuraWay Medical Technology Co., Ltd.")
+      .replace(/\b(?:Ganavi|Ganawei|Ganaiwei|Jianaiwei|Jia\s*Nai\s*Wei)\s+Medical\s+Technology\s+Co\.?,?\s*Ltd\.?/gi, "CuraWay Medical Technology Co., Ltd.");
+  }
+
+  return normalized;
 }
 
 function looksLikeNonTranslation(text, source) {
@@ -2360,7 +2397,7 @@ function getDirectionConfig(value) {
   const configs = {
     "zh-en": {
       instruction:
-        "Translate Simplified or Traditional Chinese presentation text into fluent, concise English for business slides. Use short noun phrases for titles, labels, and table-of-contents entries.",
+        "Translate Simplified or Traditional Chinese presentation text into fluent, concise English for business slides. Use short noun phrases for titles, labels, and table-of-contents entries. Always translate the company name 伽奈维 as CuraWay exactly; never use Ganavi, Ganawei, Jianaiwei, or Curaway.",
     },
     "en-zh": {
       instruction:
@@ -2368,7 +2405,7 @@ function getDirectionConfig(value) {
     },
     "auto-en": {
       instruction:
-        "Detect the source language and translate the text into fluent, concise English for business slides. Use short noun phrases for titles, labels, and table-of-contents entries.",
+        "Detect the source language and translate the text into fluent, concise English for business slides. Use short noun phrases for titles, labels, and table-of-contents entries. Always translate the company name 伽奈维 as CuraWay exactly; never use Ganavi, Ganawei, Jianaiwei, or Curaway.",
     },
     "auto-zh": {
       instruction:
