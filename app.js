@@ -11,6 +11,8 @@ const state = {
   pdfBytes: null,
   batchFiles: [],
   batchRunning: false,
+  translationRunning: false,
+  translationAbortController: null,
   savedFiles: [],
   installPrompt: null,
   wakeLock: null,
@@ -88,7 +90,7 @@ let isRestoringDraft = false;
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=43").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=44").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -180,7 +182,7 @@ setMobileView(state.mobileView);
   });
 });
 
-els.translateButton.addEventListener("click", translateAll);
+els.translateButton.addEventListener("click", handleTranslateButtonClick);
 els.batchTranslateButton?.addEventListener("click", processBatchQueue);
 els.previewButton.addEventListener("click", openPreview);
 els.downloadButton.addEventListener("click", downloadPresentation);
@@ -872,6 +874,20 @@ function renderSegments() {
   els.segmentTable.replaceChildren(fragment);
 }
 
+function handleTranslateButtonClick() {
+  if (state.translationRunning) {
+    cancelTranslation();
+    return;
+  }
+  translateAll();
+}
+
+function cancelTranslation() {
+  if (!state.translationRunning) return;
+  state.translationAbortController?.abort();
+  setStatus("正在停止翻译，请稍候...");
+}
+
 async function translateAll() {
   const apiKey = els.apiKey.value.trim();
   const apiBase = DEEPSEEK_API_BASE;
@@ -884,11 +900,17 @@ async function translateAll() {
     return;
   }
 
+  if (state.translationRunning) return false;
+  const abortController = new AbortController();
+  state.translationRunning = true;
+  state.translationAbortController = abortController;
+
   try {
     setBusy(true, "正在翻译...");
     const untranslated = state.segments.filter((segment) => !segment.translation.trim());
 
     for (let index = 0; index < untranslated.length; index += 1) {
+      if (abortController.signal.aborted) throw new DOMException("Translation stopped", "AbortError");
       const segment = untranslated[index];
       setProgress(index / untranslated.length);
       setStatus(`正在翻译 ${segment.locationLabel || segment.slideNumber}：${index + 1}/${untranslated.length}`);
@@ -899,6 +921,7 @@ async function translateAll() {
         model,
         direction,
         text: segment.original,
+        signal: abortController.signal,
       });
       updateTextarea(segment);
       updateStats();
@@ -909,20 +932,33 @@ async function translateAll() {
     setStatus("翻译完成，请检查译文后导出。");
     showToast("自动翻译完成。");
     scheduleCurrentDraftSave({ immediate: true });
+    return true;
   } catch (error) {
+    if (error?.name === "AbortError") {
+      setStatus("已停止翻译。已完成的译文会保留，可继续编辑或再次点击自动翻译续翻。");
+      showToast("已停止翻译。");
+      scheduleCurrentDraftSave({ immediate: true });
+      return false;
+    }
     showToast(error.message || "翻译失败。", true);
     setStatus("翻译中断，请检查接口配置或网络连接。");
+    return false;
   } finally {
+    if (state.translationAbortController === abortController) {
+      state.translationAbortController = null;
+    }
+    state.translationRunning = false;
     setBusy(false);
   }
 }
 
-async function translateText({ apiBase, apiProxy, apiKey, model, direction, text }) {
+async function translateText({ apiBase, apiProxy, apiKey, model, direction, text, signal }) {
   const response = await fetch(apiProxy, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
+    signal,
     body: JSON.stringify({
       apiBase,
       apiKey,
@@ -1010,7 +1046,11 @@ async function processBatchQueue() {
 
       try {
         await loadOfficeFile(file);
-        await translateAll();
+        const translated = await translateAll();
+        if (!translated) {
+          failed.push(file.name);
+          break;
+        }
         const { blob, filename } = await generateTranslatedFile();
         await saveGeneratedFile(blob, filename);
         saved.push(filename);
@@ -1398,7 +1438,7 @@ function updateStats() {
   els.slideCount.textContent = String(state.slideCount);
   els.segmentCount.textContent = String(state.segments.length);
   els.translatedCount.textContent = String(translated);
-  els.translateButton.disabled = !state.segments.length;
+  updateTranslateButtonState(document.body.classList.contains("is-busy") || state.batchRunning);
   els.previewButton.disabled = !state.segments.length;
   els.downloadButton.disabled = !state.segments.length;
   els.shareButton.disabled = !state.segments.length;
@@ -1431,7 +1471,7 @@ function setMobileView(view) {
 
 function setBusy(isBusy, message = "") {
   const effectiveBusy = isBusy || state.batchRunning;
-  els.translateButton.disabled = effectiveBusy || !state.segments.length;
+  updateTranslateButtonState(effectiveBusy);
   els.previewButton.disabled = effectiveBusy || !state.segments.length;
   els.downloadButton.disabled = effectiveBusy || !state.segments.length;
   els.shareButton.disabled = effectiveBusy || !state.segments.length;
@@ -1455,6 +1495,13 @@ function setBusy(isBusy, message = "") {
     releaseScreenWakeLock();
   }
   if (message) setStatus(message);
+}
+
+function updateTranslateButtonState(effectiveBusy = false) {
+  const canStop = state.translationRunning;
+  els.translateButton.textContent = canStop ? "停止翻译" : "自动翻译";
+  els.translateButton.classList.toggle("danger-action", canStop);
+  els.translateButton.disabled = canStop ? false : effectiveBusy || !state.segments.length;
 }
 
 async function requestScreenWakeLock() {

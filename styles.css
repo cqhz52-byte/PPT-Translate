@@ -464,6 +464,13 @@ textarea:focus {
   font-weight: 800;
 }
 
+.danger-action {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+  font-weight: 800;
+}
+
 .stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
