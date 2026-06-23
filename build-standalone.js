@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 const root = __dirname;
-const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+const read = (file) => fs.readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n");
 
 const css = read("styles.css");
 const jszip = read("vendor/jszip.min.js");

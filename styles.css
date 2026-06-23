@@ -17,6 +17,11 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  overscroll-behavior-y: contain;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -165,6 +170,10 @@ h2 {
 
 .install-button {
   color: var(--accent);
+}
+
+.help-button {
+  color: var(--accent-2);
 }
 
 .install-icon {
@@ -740,7 +749,8 @@ td:first-child {
   border-left-color: var(--danger);
 }
 
-.preview-dialog {
+.preview-dialog,
+.help-dialog {
   width: min(1120px, calc(100vw - 28px));
   max-height: min(860px, calc(100vh - 28px));
   padding: 0;
@@ -751,17 +761,24 @@ td:first-child {
   box-shadow: var(--shadow);
 }
 
-.preview-dialog::backdrop {
+.help-dialog {
+  width: min(780px, calc(100vw - 28px));
+}
+
+.preview-dialog::backdrop,
+.help-dialog::backdrop {
   background: rgba(15, 25, 23, 0.38);
 }
 
-.preview-shell {
+.preview-shell,
+.help-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   max-height: inherit;
 }
 
-.preview-head {
+.preview-head,
+.help-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -770,7 +787,8 @@ td:first-child {
   border-bottom: 1px solid var(--line);
 }
 
-.preview-head p:last-child {
+.preview-head p:last-child,
+.help-head p:last-child {
   margin: 6px 0 0;
   color: var(--muted);
 }
@@ -787,6 +805,39 @@ td:first-child {
   padding: 18px;
   overflow: auto;
   background: #f9fbfa;
+}
+
+.help-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  overflow: auto;
+  background: #f9fbfa;
+}
+
+.help-body section {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.help-body h3 {
+  margin: 0;
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.help-body ol,
+.help-body ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--ink);
+  line-height: 1.55;
 }
 
 .preview-card {
@@ -1167,13 +1218,16 @@ td:first-child {
     justify-content: flex-start;
   }
 
-  .preview-dialog {
+  .preview-dialog,
+  .help-dialog {
     width: calc(100vw - 14px);
     max-height: calc(100vh - 14px);
   }
 
   .preview-head,
-  .preview-body {
+  .preview-body,
+  .help-head,
+  .help-body {
     padding: 14px;
   }
 

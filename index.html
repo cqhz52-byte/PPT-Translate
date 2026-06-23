@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon.svg">
-    <link rel="stylesheet" href="styles.css?v=42">
+    <link rel="stylesheet" href="styles.css?v=43">
   </head>
   <body>
     <main class="shell">
@@ -17,7 +17,7 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="CuraWay">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v42 · 手机分区管理</p>
+            <p class="version">v43 · 多语种与帮助</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -44,6 +44,9 @@
               <path d="M10 18h4"></path>
             </svg>
           </button>
+          <button class="icon-button help-button" id="helpButton" type="button" title="查看帮助" aria-label="查看帮助">
+            <span aria-hidden="true">?</span>
+          </button>
           <button class="icon-button" id="resetButton" type="button" title="清空当前文件" aria-label="清空当前文件">
             <span aria-hidden="true">↺</span>
           </button>
@@ -63,10 +66,26 @@
             <label>
               翻译方向
               <select id="translationDirection">
-                <option value="zh-en" selected>中文 → 英文</option>
-                <option value="en-zh">英文 → 中文</option>
-                <option value="auto-en">自动识别 → 英文</option>
-                <option value="auto-zh">自动识别 → 中文</option>
+                <optgroup label="常用">
+                  <option value="zh-en" selected>中文 → 英文</option>
+                  <option value="en-zh">英文 → 中文</option>
+                </optgroup>
+                <optgroup label="自动识别源语言">
+                  <option value="auto-en">自动识别 → 英文</option>
+                  <option value="auto-zh">自动识别 → 中文</option>
+                  <option value="auto-ja">自动识别 → 日文</option>
+                  <option value="auto-ko">自动识别 → 韩文</option>
+                  <option value="auto-fr">自动识别 → 法文</option>
+                  <option value="auto-de">自动识别 → 德文</option>
+                  <option value="auto-es">自动识别 → 西班牙文</option>
+                  <option value="auto-pt">自动识别 → 葡萄牙文</option>
+                  <option value="auto-it">自动识别 → 意大利文</option>
+                  <option value="auto-ru">自动识别 → 俄文</option>
+                  <option value="auto-ar">自动识别 → 阿拉伯文</option>
+                  <option value="auto-th">自动识别 → 泰文</option>
+                  <option value="auto-vi">自动识别 → 越南文</option>
+                  <option value="auto-id">自动识别 → 印尼文</option>
+                </optgroup>
               </select>
             </label>
             <label>
@@ -189,7 +208,51 @@
       </div>
     </dialog>
 
+    <dialog class="help-dialog" id="helpDialog">
+      <div class="help-shell">
+        <header class="help-head">
+          <div>
+            <p class="eyebrow">Help</p>
+            <h2>使用帮助</h2>
+            <p>适合 PPTX、DOCX 和可复制文字的 PDF 翻译、校对、导出。</p>
+          </div>
+          <button class="icon-button" id="helpCloseButton" type="button" title="关闭帮助" aria-label="关闭帮助">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <div class="help-body">
+          <section>
+            <h3>基本流程</h3>
+            <ol>
+              <li>选择或拖入 PPTX、DOCX、PDF 文件；旧版 PPT/DOC 请先另存为新版格式。</li>
+              <li>在“参数”里选择翻译方向、模型和 DeepSeek API Key。</li>
+              <li>点击“自动翻译”，完成后可逐段修改译文。</li>
+              <li>用“预览译文”检查版式，再导出或分享翻译文件。</li>
+            </ol>
+          </section>
+          <section>
+            <h3>主要功能</h3>
+            <ul>
+              <li>支持中文、英文、日文、韩文、法文、德文、西班牙文等多语种目标语言。</li>
+              <li>支持一次选择多个文件，使用“批量翻译并保存”顺序处理。</li>
+              <li>PPTX 预览里可拖动文本框、调整大小、切换单行/换行和单段字号。</li>
+              <li>PDF 会尽量保留页面背景、图片、表格线，并在原文字位置覆盖写入译文。</li>
+              <li>生成后的文件会进入“文件库”，可再次下载、分享或删除。</li>
+            </ul>
+          </section>
+          <section>
+            <h3>手机使用</h3>
+            <ul>
+              <li>右上角菜单可切换“翻译、参数、输出、文件库”分区。</li>
+              <li>刷新或误触下拉刷新后，会自动恢复上次未导出的当前草稿。</li>
+              <li>长文件翻译或 PDF 导出时请保持页面打开，避免锁屏或切到后台。</li>
+            </ul>
+          </section>
+        </div>
+      </div>
+    </dialog>
+
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=42" type="module"></script>
+    <script src="app.js?v=43" type="module"></script>
   </body>
 </html>

@@ -30,6 +30,9 @@ const els = {
   downloadButton: document.querySelector("#downloadButton"),
   shareButton: document.querySelector("#shareButton"),
   resetButton: document.querySelector("#resetButton"),
+  helpButton: document.querySelector("#helpButton"),
+  helpDialog: document.querySelector("#helpDialog"),
+  helpCloseButton: document.querySelector("#helpCloseButton"),
   installButton: document.querySelector("#installButton"),
   workspace: document.querySelector("#workspace"),
   mobileViewButton: document.querySelector("#mobileViewButton"),
@@ -66,6 +69,10 @@ const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
 const SETTINGS_VERSION = 5;
 const SAVED_FILES_DB = "curaway-translated-files-v1";
 const SAVED_FILES_STORE = "files";
+const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
+const CURRENT_DRAFT_STORE = "drafts";
+const CURRENT_DRAFT_ID = "current";
+const DRAFT_SAVE_DELAY = 600;
 const DEEPSEEK_API_BASE = "https://api.deepseek.com";
 const TRANSLATE_PROXY = "./api/translate";
 const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
@@ -75,11 +82,13 @@ const FONTKIT_URL = "https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/+esm";
 const PDF_FONT_URL = "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf";
 const parser = new DOMParser();
 const serializer = new XMLSerializer();
+let draftSaveTimer = 0;
+let isRestoringDraft = false;
 
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=42").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=43").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -87,8 +96,12 @@ if ("serviceWorker" in navigator) {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && document.body.classList.contains("is-busy")) {
     requestScreenWakeLock();
+  } else if (document.visibilityState === "hidden") {
+    flushCurrentDraftSave();
   }
 });
+
+window.addEventListener("pagehide", flushCurrentDraftSave);
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
@@ -172,12 +185,17 @@ els.batchTranslateButton?.addEventListener("click", processBatchQueue);
 els.previewButton.addEventListener("click", openPreview);
 els.downloadButton.addEventListener("click", downloadPresentation);
 els.shareButton.addEventListener("click", sharePresentation);
-els.resetButton.addEventListener("click", resetApp);
+els.resetButton.addEventListener("click", () => resetApp());
+els.helpButton?.addEventListener("click", openHelp);
+els.helpCloseButton?.addEventListener("click", closeHelp);
 els.previewCloseButton.addEventListener("click", closePreview);
 els.previewDownloadButton.addEventListener("click", downloadPresentation);
 els.previewShareButton.addEventListener("click", sharePresentation);
 els.previewDialog.addEventListener("click", (event) => {
   if (event.target === els.previewDialog) closePreview();
+});
+els.helpDialog?.addEventListener("click", (event) => {
+  if (event.target === els.helpDialog) closeHelp();
 });
 
 [
@@ -194,6 +212,9 @@ els.previewDialog.addEventListener("click", (event) => {
 updateFontScaleLabel();
 loadSavedFiles().catch((error) => {
   console.warn("Saved file list unavailable", error);
+});
+restoreCurrentDraft().catch((error) => {
+  console.warn("Draft restore unavailable", error);
 });
 
 async function loadOfficeFile(file, options = {}) {
@@ -239,10 +260,11 @@ async function loadOfficeFile(file, options = {}) {
     updateStats();
     els.fileMeta.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`;
     setStatus(`已解析 ${getFileTypeName()}，共 ${state.segments.length} 段文字。默认使用 DeepSeek 翻译。`);
-    showToast(`${getFileTypeName()} 已载入，可以开始翻译或手动编辑。`);
+    if (!options.skipDraftSave) scheduleCurrentDraftSave({ immediate: true });
+    if (!silent) showToast(`${getFileTypeName()} 已载入，可以开始翻译或手动编辑。`);
   } catch (error) {
     showToast(error.message || "读取文件失败。", true);
-    resetApp(false);
+    resetApp(false, { clearDraft: false });
   } finally {
     setBusy(false);
   }
@@ -839,6 +861,7 @@ function renderSegments() {
       state.segments[Number(textarea.dataset.index)].translation = textarea.value;
       updateStats();
       rerenderPreviewIfOpen();
+      scheduleCurrentDraftSave();
     });
     targetCell.append(textarea, createSegmentControls(segment, index));
 
@@ -879,11 +902,13 @@ async function translateAll() {
       });
       updateTextarea(segment);
       updateStats();
+      scheduleCurrentDraftSave();
     }
 
     setProgress(1);
     setStatus("翻译完成，请检查译文后导出。");
     showToast("自动翻译完成。");
+    scheduleCurrentDraftSave({ immediate: true });
   } catch (error) {
     showToast(error.message || "翻译失败。", true);
     setStatus("翻译中断，请检查接口配置或网络连接。");
@@ -1259,21 +1284,21 @@ function openSavedFilesDb() {
 }
 
 function idbPut(db, record) {
-  return idbRequest(db, "readwrite", (store) => store.put(record));
+  return idbRequest(db, SAVED_FILES_STORE, "readwrite", (store) => store.put(record));
 }
 
 function idbGetAll(db) {
-  return idbRequest(db, "readonly", (store) => store.getAll());
+  return idbRequest(db, SAVED_FILES_STORE, "readonly", (store) => store.getAll());
 }
 
 function idbDelete(db, id) {
-  return idbRequest(db, "readwrite", (store) => store.delete(id));
+  return idbRequest(db, SAVED_FILES_STORE, "readwrite", (store) => store.delete(id));
 }
 
-function idbRequest(db, mode, action) {
+function idbRequest(db, storeName, mode, action) {
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(SAVED_FILES_STORE, mode);
-    const request = action(transaction.objectStore(SAVED_FILES_STORE));
+    const transaction = db.transaction(storeName, mode);
+    const request = action(transaction.objectStore(storeName));
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
     transaction.onerror = () => reject(transaction.error);
@@ -1488,6 +1513,24 @@ function closePreview() {
   els.previewDialog.close();
 }
 
+function openHelp() {
+  if (!els.helpDialog) return;
+  if (typeof els.helpDialog.showModal === "function") {
+    els.helpDialog.showModal();
+  } else {
+    els.helpDialog.setAttribute("open", "");
+  }
+}
+
+function closeHelp() {
+  if (!els.helpDialog) return;
+  if (typeof els.helpDialog.close === "function") {
+    els.helpDialog.close();
+  } else {
+    els.helpDialog.removeAttribute("open");
+  }
+}
+
 function renderPreview() {
   const previousScrollTop = els.previewBody.scrollTop;
   const selectedIndex = els.previewBody.querySelector(".slide-text-box.selected")?.dataset.index || "";
@@ -1624,10 +1667,8 @@ async function downloadPdfTranslation() {
 function drawPdfOverlayTranslation(page, segment, font, rgb) {
   const sourceBounds = segment.layout.bounds;
   const cell = segment.layout.tableCell;
-  const direction = els.translationDirection?.value || "";
-  const sourceHasHan = containsHanCharacters(segment.original || "");
-  const isEnglishExport = direction === "zh-en" || direction === "auto-en";
-  if (isEnglishExport && !sourceHasHan) return;
+  const direction = getDirectionConfig(els.translationDirection?.value || "");
+  if (shouldSkipSegmentForDirection(segment, direction)) return;
 
   const fitBounds = cell
     ? { x: cell.x + 2, y: cell.y + 2, width: Math.max(4, cell.width - 4), height: Math.max(4, cell.height - 4) }
@@ -1691,11 +1732,15 @@ function getPdfExportText(segment) {
   if (!text) return "";
 
   const direction = els.translationDirection?.value || "";
-  if ((direction === "zh-en" || direction === "auto-en") && containsHanCharacters(text)) {
+  if (getDirectionConfig(direction).targetCode === "en" && containsHanCharacters(text)) {
     return "";
   }
 
   return text;
+}
+
+function shouldSkipSegmentForDirection(segment, direction) {
+  return direction.sourceLanguage === "Chinese" && !containsHanCharacters(segment.original || "");
 }
 
 function containsHanCharacters(text) {
@@ -1946,6 +1991,7 @@ function createPreviewBoxTools(segment, index) {
     current.overrides.fontScale = scaleInput.value;
     scaleValue.textContent = getPreviewScaleLabel(current);
     rerenderPreviewIfOpen();
+    scheduleCurrentDraftSave();
   });
 
   const wrapButton = document.createElement("button");
@@ -1958,6 +2004,7 @@ function createPreviewBoxTools(segment, index) {
     current.overrides.singleLine = nextSingleLine;
     current.overrides.wrapMode = nextSingleLine ? "single" : "wrap";
     rerenderPreviewIfOpen();
+    scheduleCurrentDraftSave();
   });
 
   const resetButton = document.createElement("button");
@@ -1968,6 +2015,7 @@ function createPreviewBoxTools(segment, index) {
     state.segments[index].overrides = createSegmentOverrides();
     renderSegments();
     rerenderPreviewIfOpen();
+    scheduleCurrentDraftSave();
   });
 
   const exportButton = document.createElement("button");
@@ -2029,7 +2077,10 @@ function attachPreviewMove(box, segment) {
       box.removeEventListener("pointerup", onEnd);
       box.removeEventListener("pointercancel", onEnd);
       box.classList.remove("moving");
-      if (didMove) renderSegments();
+      if (didMove) {
+        renderSegments();
+        scheduleCurrentDraftSave();
+      }
     };
 
     box.addEventListener("pointermove", onMove);
@@ -2071,6 +2122,7 @@ function attachPreviewResize(handle, box, segment) {
       handle.removeEventListener("pointerup", onEnd);
       handle.removeEventListener("pointercancel", onEnd);
       renderSegments();
+      scheduleCurrentDraftSave();
     };
 
     handle.addEventListener("pointermove", onMove);
@@ -2115,7 +2167,163 @@ function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function resetApp(clearInput = true) {
+function scheduleCurrentDraftSave(options = {}) {
+  if (isRestoringDraft || state.batchRunning || !state.file || !state.segments.length) return;
+  window.clearTimeout(draftSaveTimer);
+
+  if (options.immediate) {
+    draftSaveTimer = 0;
+    saveCurrentDraft().catch((error) => console.warn("Draft save failed", error));
+    return;
+  }
+
+  draftSaveTimer = window.setTimeout(() => {
+    draftSaveTimer = 0;
+    saveCurrentDraft().catch((error) => console.warn("Draft save failed", error));
+  }, DRAFT_SAVE_DELAY);
+}
+
+function flushCurrentDraftSave() {
+  if (!draftSaveTimer && (!state.file || !state.segments.length)) return;
+  window.clearTimeout(draftSaveTimer);
+  draftSaveTimer = 0;
+  saveCurrentDraft().catch((error) => console.warn("Draft flush failed", error));
+}
+
+async function saveCurrentDraft() {
+  if (isRestoringDraft || state.batchRunning || !state.file || !state.segments.length) return;
+
+  const db = await openCurrentDraftDb();
+  await idbRequest(db, CURRENT_DRAFT_STORE, "readwrite", (store) =>
+    store.put({
+      id: CURRENT_DRAFT_ID,
+      version: 1,
+      savedAt: new Date().toISOString(),
+      fileName: state.file.name,
+      fileType: state.fileType,
+      fileSize: state.file.size,
+      fileLastModified: state.file.lastModified || 0,
+      fileBlob: state.file,
+      slideSize: state.slideSize,
+      mobileView: state.mobileView,
+      segments: state.segments.map((segment) => ({
+        id: segment.id,
+        type: segment.type,
+        path: segment.path,
+        paragraphIndex: segment.paragraphIndex,
+        original: segment.original,
+        translation: segment.translation || "",
+        overrides: sanitizeSegmentOverrides(segment.overrides),
+      })),
+    })
+  );
+}
+
+async function restoreCurrentDraft() {
+  if (state.file || state.segments.length) return;
+
+  const db = await openCurrentDraftDb();
+  const draft = await idbRequest(db, CURRENT_DRAFT_STORE, "readonly", (store) => store.get(CURRENT_DRAFT_ID));
+  if (!draft?.fileBlob || !draft.fileName) return;
+
+  isRestoringDraft = true;
+  try {
+    setBusy(true, "正在恢复上次编辑内容...");
+    const file = new File([draft.fileBlob], draft.fileName, {
+      type: draft.fileBlob.type || getMimeTypeForFileType(draft.fileType),
+      lastModified: draft.fileLastModified || Date.now(),
+    });
+
+    await loadOfficeFile(file, { silent: true, skipDraftSave: true });
+    if (!state.file || !state.segments.length) {
+      throw new Error("Draft source file could not be restored");
+    }
+    applyDraftSegments(draft);
+    renderSegments();
+    updateStats();
+    if (draft.mobileView) setMobileView(draft.mobileView);
+    setStatus(`已恢复 ${draft.fileName} 的上次编辑内容。`);
+    showToast("已恢复上次未导出的翻译内容。");
+  } catch (error) {
+    console.warn("Draft restore failed", error);
+    setStatus("上次编辑内容恢复失败，请重新选择文件。");
+  } finally {
+    isRestoringDraft = false;
+    setBusy(false);
+  }
+}
+
+function applyDraftSegments(draft) {
+  const savedSegments = new Map((draft.segments || []).map((segment) => [segment.id, segment]));
+
+  state.segments.forEach((segment) => {
+    const saved = savedSegments.get(segment.id);
+    if (!saved || saved.original !== segment.original) return;
+    segment.translation = saved.translation || "";
+    segment.overrides = {
+      ...createSegmentOverrides(),
+      ...sanitizeSegmentOverrides(saved.overrides),
+    };
+  });
+}
+
+function sanitizeSegmentOverrides(overrides = {}) {
+  const clean = createSegmentOverrides();
+  if (!overrides || typeof overrides !== "object") return clean;
+
+  clean.fontScale = overrides.fontScale ? String(overrides.fontScale) : "";
+  clean.singleLine = Boolean(overrides.singleLine);
+  clean.wrapMode = ["single", "wrap"].includes(overrides.wrapMode) ? overrides.wrapMode : "";
+
+  if (overrides.bounds && ["x", "y", "cx", "cy"].every((key) => Number.isFinite(Number(overrides.bounds[key])))) {
+    clean.bounds = {
+      x: Number(overrides.bounds.x),
+      y: Number(overrides.bounds.y),
+      cx: Number(overrides.bounds.cx),
+      cy: Number(overrides.bounds.cy),
+    };
+  }
+
+  return clean;
+}
+
+async function clearCurrentDraft() {
+  window.clearTimeout(draftSaveTimer);
+  draftSaveTimer = 0;
+
+  try {
+    const db = await openCurrentDraftDb();
+    await idbRequest(db, CURRENT_DRAFT_STORE, "readwrite", (store) => store.delete(CURRENT_DRAFT_ID));
+  } catch (error) {
+    console.warn("Draft clear failed", error);
+  }
+}
+
+function getMimeTypeForFileType(fileType) {
+  if (fileType === "docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (fileType === "pdf") return "application/pdf";
+  return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+}
+
+function openCurrentDraftDb() {
+  return new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) {
+      reject(new Error("IndexedDB unavailable"));
+      return;
+    }
+    const request = indexedDB.open(CURRENT_DRAFT_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(CURRENT_DRAFT_STORE)) {
+        db.createObjectStore(CURRENT_DRAFT_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function resetApp(clearInput = true, options = {}) {
   state.file = null;
   state.fileType = "";
   state.zip = null;
@@ -2124,11 +2332,13 @@ function resetApp(clearInput = true) {
   state.slideVisuals = new Map();
   state.pdfPageSizes = new Map();
   state.pdfTableCells = new Map();
+  state.pdfBytes = null;
   if (clearInput) els.fileInput.value = "";
   els.fileMeta.textContent = "支持 PPTX / DOCX / PDF；旧版 PPT/DOC 请先另存";
   renderSegments();
   updateStats();
   setStatus("请先选择一个 PPTX、DOCX 或 PDF 文件。");
+  if (options.clearDraft !== false) clearCurrentDraft();
 }
 
 function buildOutputName(name) {
@@ -2449,6 +2659,7 @@ function createSegmentControls(segment, index) {
     current.overrides.fontScale = scaleInput.value;
     scaleValue.textContent = `${scaleInput.value}%`;
     rerenderPreviewIfOpen();
+    scheduleCurrentDraftSave();
   });
 
   scaleLabel.append(scaleText, scaleInput, scaleValue);
@@ -2465,6 +2676,7 @@ function createSegmentControls(segment, index) {
     current.overrides.singleLine = singleLineInput.checked;
     current.overrides.wrapMode = singleLineInput.checked ? "single" : "";
     rerenderPreviewIfOpen();
+    scheduleCurrentDraftSave();
   });
 
   const singleLineText = document.createElement("span");
@@ -2482,6 +2694,7 @@ function createSegmentControls(segment, index) {
     renderSegments();
     updateStats();
     rerenderPreviewIfOpen();
+    scheduleCurrentDraftSave();
   });
 
   const pageButton = document.createElement("button");
@@ -2504,6 +2717,7 @@ function createSegmentControls(segment, index) {
     renderSegments();
     updateStats();
     rerenderPreviewIfOpen();
+    scheduleCurrentDraftSave();
   });
 
   controls.append(scaleLabel);
@@ -2775,24 +2989,46 @@ function showToast(message, isError = false) {
 }
 
 function getDirectionConfig(value) {
-  const configs = {
-    "zh-en": {
-      instruction:
-        "Translate Simplified or Traditional Chinese presentation text into fluent, concise English for business slides. Use short noun phrases for titles, labels, and table-of-contents entries. Always translate the company name 伽奈维 as CuraWay exactly; never use Ganavi, Ganawei, Jianaiwei, or Curaway.",
-    },
-    "en-zh": {
-      instruction:
-        "Translate English presentation text into natural Simplified Chinese for business slides.",
-    },
-    "auto-en": {
-      instruction:
-        "Detect the source language and translate the text into fluent, concise English for business slides. Use short noun phrases for titles, labels, and table-of-contents entries. Always translate the company name 伽奈维 as CuraWay exactly; never use Ganavi, Ganawei, Jianaiwei, or Curaway.",
-    },
-    "auto-zh": {
-      instruction:
-        "Detect the source language and translate the text into natural Simplified Chinese for business slides.",
-    },
+  const targets = {
+    en: { name: "English", style: "fluent, concise English" },
+    zh: { name: "Simplified Chinese", style: "natural Simplified Chinese" },
+    ja: { name: "Japanese", style: "natural Japanese" },
+    ko: { name: "Korean", style: "natural Korean" },
+    fr: { name: "French", style: "natural French" },
+    de: { name: "German", style: "natural German" },
+    es: { name: "Spanish", style: "natural Spanish" },
+    pt: { name: "Portuguese", style: "natural Portuguese" },
+    it: { name: "Italian", style: "natural Italian" },
+    ru: { name: "Russian", style: "natural Russian" },
+    ar: { name: "Arabic", style: "natural Arabic" },
+    th: { name: "Thai", style: "natural Thai" },
+    vi: { name: "Vietnamese", style: "natural Vietnamese" },
+    id: { name: "Indonesian", style: "natural Indonesian" },
   };
 
-  return configs[value] || configs["zh-en"];
+  const directConfigs = {
+    "zh-en": { sourceLanguage: "Chinese", targetCode: "en" },
+    "en-zh": { sourceLanguage: "English", targetCode: "zh" },
+  };
+  const direct = directConfigs[value];
+  const targetCode = direct?.targetCode || String(value || "zh-en").replace(/^auto-/, "");
+  const target = targets[targetCode] || targets.en;
+  const sourcePhrase = direct?.sourceLanguage
+    ? `Translate ${direct.sourceLanguage} presentation text`
+    : "Detect the source language and translate the text";
+  const compactGuidance = targetCode === "en"
+    ? "Use short noun phrases for titles, labels, and table-of-contents entries."
+    : "Keep titles, labels, and table-of-contents entries short and slide-friendly.";
+
+  return {
+    sourceLanguage: direct?.sourceLanguage || "auto",
+    targetLanguage: target.name,
+    targetCode,
+    instruction: [
+      `${sourcePhrase} into ${target.style} for business slides.`,
+      compactGuidance,
+      "Preserve numbers, units, product names, acronyms, and placeholders.",
+      "Always translate the company name 伽奈维 as CuraWay exactly; never use Ganavi, Ganawei, Jianaiwei, or Curaway.",
+    ].join(" "),
+  };
 }
