@@ -64,7 +64,7 @@ const els = {
 };
 
 const slidePathPattern = /^ppt\/slides\/slide(\d+)\.xml$/;
-const wordPathPattern = /^word\/(?:document|footnotes|endnotes|comments)\.xml$/;
+const wordPathPattern = /^word\/(?:document|header\d+|footnotes|endnotes|comments)\.xml$/;
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
@@ -1421,7 +1421,6 @@ function writeWordSegments(doc, segments) {
     if (!textNodes.length) return;
 
     textNodes[0].textContent = segment.translation.trim();
-    normalizeWordRunStyle(textNodes[0], segment);
     clearRemainingTextNodes(textNodes);
   });
 }
@@ -2466,26 +2465,6 @@ function normalizePresentationRunStyle(textNode, segment) {
   setTypeface(runProperties, "cs", "Arial");
 
   [...runProperties.getElementsByTagNameNS(DRAWING_NS, "sym")].forEach((node) => node.remove());
-}
-
-function normalizeWordRunStyle(textNode, segment) {
-  const run = textNode.parentElement;
-  if (!run) return;
-
-  const runProperties = ensureChildNS(run, WORD_NS, "w:rPr", "rPr");
-  const fonts = ensureChildNS(runProperties, WORD_NS, "w:rFonts", "rFonts");
-  fonts.setAttributeNS(WORD_NS, "w:ascii", "Arial");
-  fonts.setAttributeNS(WORD_NS, "w:hAnsi", "Arial");
-  fonts.setAttributeNS(WORD_NS, "w:eastAsia", "Microsoft YaHei");
-  fonts.setAttributeNS(WORD_NS, "w:cs", "Arial");
-
-  const scale = getLengthScale(segment.original, segment.translation, segment);
-  const sizeNode = [...runProperties.children].find((node) => node.localName === "sz");
-  const currentSize = Number(sizeNode?.getAttributeNS(WORD_NS, "val") || sizeNode?.getAttribute("w:val") || 0);
-
-  if (sizeNode && currentSize > 0 && scale < 1) {
-    sizeNode.setAttributeNS(WORD_NS, "w:val", String(Math.max(16, Math.round(currentSize * scale))));
-  }
 }
 
 function applyPresentationBounds(paragraph, segment) {
