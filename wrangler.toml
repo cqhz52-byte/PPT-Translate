@@ -5,6 +5,6 @@ compatibility_date = "2026-06-24"
 
 [env.production]
 
-[[kv_namespaces]]
+[[env.production.kv_namespaces]]
 binding = "PHONE_AUTH_KV"
 id = "996a31b2d4fa41979f5796971300f257"
