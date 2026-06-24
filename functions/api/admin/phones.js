@@ -45,6 +45,8 @@ export async function onRequestPost({ request, env }) {
 
   if (Object.prototype.hasOwnProperty.call(body, "password") || Object.prototype.hasOwnProperty.call(body, "pin") || Object.prototype.hasOwnProperty.call(body, "code")) {
     const password = String(body.password || body.pin || body.code || "").trim();
+    const passwordConfirm = String(body.passwordConfirm || body.pinConfirm || body.codeConfirm || "").trim();
+    if (password !== passwordConfirm) return json({ error: "两次输入的密码不一致。" }, 400);
     if (password) next.pinHash = await hashSecret(password);
   } else if (existing.pinHash || existing.passwordHash || existing.pin || existing.code) {
     next.pinHash = existing.pinHash || existing.passwordHash || existing.pin || existing.code;

@@ -35,6 +35,8 @@ export async function onRequestPost({ request, env }) {
   }
 
   const password = String(body.password || "").trim();
+  const passwordConfirm = String(body.passwordConfirm || "").trim();
+  if (password !== passwordConfirm) return json({ error: "两次输入的密码不一致。" }, 400);
   if (isNewAdmin && password.length < 6) return json({ error: "新超级管理员密码至少 6 位。" }, 400);
   if (password && password.length < 6) return json({ error: "超级管理员密码至少 6 位。" }, 400);
 

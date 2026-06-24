@@ -34,6 +34,7 @@ function adminLoginPage(setupRequired) {
       <form id="adminAuthForm" data-mode="${mode}">
         <label>手机号 <input name="phone" inputmode="tel" autocomplete="tel" required></label>
         <label>密码 <input name="password" type="password" autocomplete="current-password" required minlength="6"></label>
+        ${setupRequired ? '<label>确认密码 <input name="passwordConfirm" type="password" autocomplete="new-password" required minlength="6"></label>' : ""}
         <button type="submit">${buttonText}</button>
         <div class="error" id="errorText"></div>
       </form>
@@ -45,12 +46,19 @@ function adminLoginPage(setupRequired) {
         const form = event.currentTarget;
         const data = new FormData(form);
         const endpoint = form.dataset.mode === "setup" ? "/api/admin/setup" : "/api/admin/login";
+        if (form.dataset.mode === "setup" && data.get("password") !== data.get("passwordConfirm")) {
+          const error = document.querySelector("#errorText");
+          error.textContent = "两次输入的密码不一致。";
+          error.style.display = "block";
+          return;
+        }
         const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             phone: data.get("phone"),
-            password: data.get("password")
+            password: data.get("password"),
+            passwordConfirm: data.get("passwordConfirm")
           })
         });
         const payload = await response.json().catch(() => ({}));
@@ -96,6 +104,7 @@ function adminPage(session) {
         <form id="adminForm" class="user-form">
           <label>手机号 <input name="phone" inputmode="tel" autocomplete="tel" required></label>
           <label>密码 <input name="password" type="password" autocomplete="new-password" placeholder="新增必填，修改可留空"></label>
+          <label>确认密码 <input name="passwordConfirm" type="password" autocomplete="new-password" placeholder="再次输入新密码"></label>
           <label class="check"><input name="enabled" type="checkbox" checked> 启用这个管理员</label>
           <div class="form-actions">
             <button type="submit">保存管理员</button>
@@ -133,6 +142,7 @@ function adminPage(session) {
         <form id="userForm" class="user-form">
           <label>手机号 <input name="phone" inputmode="tel" autocomplete="tel" required></label>
           <label>密码 <input name="password" type="password" autocomplete="new-password" placeholder="留空表示不修改密码"></label>
+          <label>确认密码 <input name="passwordConfirm" type="password" autocomplete="new-password" placeholder="再次输入新密码"></label>
           <label class="check"><input name="enabled" type="checkbox" checked> 启用这个用户</label>
           <div class="form-actions">
             <button type="submit">保存授权</button>
@@ -277,7 +287,13 @@ function adminPage(session) {
           enabled: form.elements.enabled.checked
         };
         const password = String(data.get("password") || "").trim();
+        const passwordConfirm = String(data.get("passwordConfirm") || "").trim();
+        if (password !== passwordConfirm) {
+          showError("两次输入的密码不一致。");
+          return;
+        }
         if (password) body.password = password;
+        if (passwordConfirm) body.passwordConfirm = passwordConfirm;
         try {
           await api("/api/admin/phones", {
             method: "POST",
@@ -298,7 +314,13 @@ function adminPage(session) {
           enabled: adminForm.elements.enabled.checked
         };
         const password = String(data.get("password") || "").trim();
+        const passwordConfirm = String(data.get("passwordConfirm") || "").trim();
+        if (password !== passwordConfirm) {
+          showAdminError("两次输入的密码不一致。");
+          return;
+        }
         if (password) body.password = password;
+        if (passwordConfirm) body.passwordConfirm = passwordConfirm;
         try {
           await api("/api/admin/super-admins", {
             method: "POST",
@@ -317,6 +339,7 @@ function adminPage(session) {
         if (editPhone) {
           form.elements.phone.value = editPhone;
           form.elements.password.value = "";
+          form.elements.passwordConfirm.value = "";
           form.elements.enabled.checked = event.target.dataset.enabled === "true";
           formTitle.textContent = "修改授权用户";
           form.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -338,6 +361,7 @@ function adminPage(session) {
         if (editPhone) {
           adminForm.elements.phone.value = editPhone;
           adminForm.elements.password.value = "";
+          adminForm.elements.passwordConfirm.value = "";
           adminForm.elements.enabled.checked = event.target.dataset.enabled === "true";
           adminFormTitle.textContent = "修改超级管理员";
           adminForm.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -414,7 +438,7 @@ function baseStyles() {
     .top-actions, .form-actions, .section-head, .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .panel { margin-top: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
     .section-head { justify-content: space-between; margin-bottom: 10px; }
-    .user-form { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto; gap: 12px; align-items: end; }
+    .user-form { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(160px, 1fr) auto; gap: 12px; align-items: end; }
     .check { display: flex; align-items: center; gap: 8px; height: 44px; }
     .check input { width: 18px; height: 18px; }
     .form-actions { grid-column: 1 / -1; }

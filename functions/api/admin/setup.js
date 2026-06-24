@@ -5,6 +5,9 @@ export async function onRequestPost({ request, env }) {
   if (await hasSuperAdmin(env)) return json({ error: "超级用户已经存在，请直接登录。" }, 409);
 
   const body = await request.json().catch(() => ({}));
+  if (String(body.password || "") !== String(body.passwordConfirm || "")) {
+    return json({ error: "两次输入的密码不一致。" }, 400);
+  }
   const result = await createSuperAdmin(body.phone, body.password, env);
   if (!result.ok) return json({ error: result.error || "创建失败。" }, 400);
 
