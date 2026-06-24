@@ -790,6 +790,18 @@ td:first-child {
   line-height: 1.55;
 }
 
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.dialog-actions button {
+  width: auto;
+  min-width: 88px;
+  margin-top: 0;
+}
+
 .preview-dialog,
 .help-dialog {
   width: min(1120px, calc(100vw - 28px));

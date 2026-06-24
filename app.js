@@ -20,6 +20,11 @@ const state = {
   wakeLockNoticeShown: false,
   wakeLockWarningShown: false,
   mobileView: "translate",
+  serviceWorkerRegistration: null,
+  updatePromptShown: false,
+  updateCheckRunning: false,
+  pullStartY: 0,
+  pullCheckReady: false,
 };
 
 const els = {
@@ -76,6 +81,10 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
+const APP_VERSION = "v52";
+const VERSION_URL = "./version.json";
+const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
+const PULL_UPDATE_THRESHOLD = 76;
 const DEEPSEEK_API_BASE = "https://api.deepseek.com";
 const TRANSLATE_PROXY = "./api/translate";
 const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
@@ -98,7 +107,8 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=51").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=52").then((registration) => {
+    state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
@@ -117,15 +127,144 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+initUpdateChecks();
+
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && document.body.classList.contains("is-busy")) {
     requestScreenWakeLock();
   } else if (document.visibilityState === "hidden") {
     flushCurrentDraftSave();
   }
+  if (document.visibilityState === "visible") {
+    checkForAppUpdate();
+  }
 });
 
 window.addEventListener("pagehide", flushCurrentDraftSave);
+
+function initUpdateChecks() {
+  window.setTimeout(() => checkForAppUpdate(), 2500);
+  window.setInterval(() => {
+    if (document.visibilityState === "visible") checkForAppUpdate();
+  }, UPDATE_CHECK_INTERVAL);
+
+  window.addEventListener("touchstart", (event) => {
+    if (window.scrollY > 0 || document.body.classList.contains("is-busy")) return;
+    state.pullStartY = event.touches[0]?.clientY || 0;
+    state.pullCheckReady = false;
+  }, { passive: true });
+
+  window.addEventListener("touchmove", (event) => {
+    if (!state.pullStartY || window.scrollY > 0 || document.body.classList.contains("is-busy")) return;
+    const delta = (event.touches[0]?.clientY || 0) - state.pullStartY;
+    if (delta > PULL_UPDATE_THRESHOLD && !state.pullCheckReady) {
+      state.pullCheckReady = true;
+      setStatus("松手检查是否有新版本...");
+    }
+  }, { passive: true });
+
+  window.addEventListener("touchend", () => {
+    const shouldCheck = state.pullCheckReady;
+    state.pullStartY = 0;
+    state.pullCheckReady = false;
+    if (shouldCheck) {
+      checkForAppUpdate({ manual: true });
+    }
+  }, { passive: true });
+}
+
+async function checkForAppUpdate(options = {}) {
+  if (state.updateCheckRunning) return false;
+  state.updateCheckRunning = true;
+
+  try {
+    const response = await fetch(`${VERSION_URL}?t=${Date.now()}`, {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" },
+    });
+    if (!response.ok) throw new Error("Version check failed");
+    const info = await response.json();
+    const latestVersion = String(info.version || "").trim();
+    if (!latestVersion) return false;
+
+    if (isNewerAppVersion(latestVersion, APP_VERSION)) {
+      showAppUpdatePrompt(info);
+      return true;
+    }
+
+    if (options.manual) {
+      showToast(`当前已经是最新版本 ${APP_VERSION}。`);
+      setStatus(`当前已经是最新版本 ${APP_VERSION}。`);
+      state.serviceWorkerRegistration?.update?.().catch(() => {});
+    }
+    return false;
+  } catch (error) {
+    if (options.manual) {
+      showToast("暂时无法检查更新，请稍后再试。", true);
+    }
+    return false;
+  } finally {
+    state.updateCheckRunning = false;
+  }
+}
+
+function isNewerAppVersion(latestVersion, currentVersion) {
+  const latest = Number(String(latestVersion).replace(/[^\d.]/g, "").split(".")[0] || 0);
+  const current = Number(String(currentVersion).replace(/[^\d.]/g, "").split(".")[0] || 0);
+  if (latest && current) return latest > current;
+  return latestVersion !== currentVersion;
+}
+
+function showAppUpdatePrompt(info) {
+  if (state.updatePromptShown) return;
+  state.updatePromptShown = true;
+
+  const latestVersion = String(info.version || "").trim();
+  const message = info.message || `发现新版本 ${latestVersion}，建议立即更新。`;
+  const dialog = document.createElement("dialog");
+  dialog.className = "completion-dialog";
+  dialog.innerHTML = `
+    <form method="dialog" class="completion-card">
+      <h2></h2>
+      <p></p>
+      <div class="dialog-actions">
+        <button value="later" type="submit">稍后</button>
+        <button class="primary" value="update" type="submit">立即更新</button>
+      </div>
+    </form>
+  `;
+  dialog.querySelector("h2").textContent = "发现新版本";
+  dialog.querySelector("p").textContent = message;
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => {
+    const shouldUpdate = dialog.returnValue === "update";
+    dialog.remove();
+    state.updatePromptShown = false;
+    if (shouldUpdate) {
+      applyAppUpdate();
+    }
+  });
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else if (window.confirm(message)) {
+    applyAppUpdate();
+  }
+}
+
+async function applyAppUpdate() {
+  setStatus("正在更新到最新版本...");
+  try {
+    const registration = state.serviceWorkerRegistration || await navigator.serviceWorker?.getRegistration?.();
+    await registration?.update?.();
+    if (registration?.waiting) {
+      registration.waiting.postMessage({ type: "SKIP_WAITING" });
+      return;
+    }
+  } catch (error) {
+    console.warn("App update failed", error);
+  }
+  window.location.reload();
+}
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
