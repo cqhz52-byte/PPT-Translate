@@ -91,6 +91,44 @@ function adminPage(session) {
       </header>
 
       <section class="panel">
+        <h2 id="adminFormTitle">添加超级管理员</h2>
+        <p class="panel-copy">最多可设置 2 个超级管理员。第二个超级管理员必须由已登录的超级管理员添加。</p>
+        <form id="adminForm" class="user-form">
+          <label>手机号 <input name="phone" inputmode="tel" autocomplete="tel" required></label>
+          <label>密码 <input name="password" type="password" autocomplete="new-password" placeholder="新增必填，修改可留空"></label>
+          <label class="check"><input name="enabled" type="checkbox" checked> 启用这个管理员</label>
+          <div class="form-actions">
+            <button type="submit">保存管理员</button>
+            <button class="ghost" id="adminResetButton" type="button">清空</button>
+          </div>
+          <div class="error" id="adminErrorText"></div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>超级管理员</h2>
+          <button class="ghost" id="adminRefreshButton" type="button">刷新</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>手机号</th>
+                <th>状态</th>
+                <th>创建时间</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="adminRows">
+              <tr><td colspan="5">正在加载...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2 id="formTitle">添加授权用户</h2>
         <form id="userForm" class="user-form">
           <label>手机号 <input name="phone" inputmode="tel" autocomplete="tel" required></label>
@@ -133,10 +171,19 @@ function adminPage(session) {
       const rows = document.querySelector("#phoneRows");
       const errorText = document.querySelector("#errorText");
       const formTitle = document.querySelector("#formTitle");
+      const adminForm = document.querySelector("#adminForm");
+      const adminRows = document.querySelector("#adminRows");
+      const adminErrorText = document.querySelector("#adminErrorText");
+      const adminFormTitle = document.querySelector("#adminFormTitle");
 
       function showError(message) {
         errorText.textContent = message || "";
         errorText.style.display = message ? "block" : "none";
+      }
+
+      function showAdminError(message) {
+        adminErrorText.textContent = message || "";
+        adminErrorText.style.display = message ? "block" : "none";
       }
 
       function resetForm() {
@@ -144,6 +191,13 @@ function adminPage(session) {
         form.elements.enabled.checked = true;
         formTitle.textContent = "添加授权用户";
         showError("");
+      }
+
+      function resetAdminForm() {
+        adminForm.reset();
+        adminForm.elements.enabled.checked = true;
+        adminFormTitle.textContent = "添加超级管理员";
+        showAdminError("");
       }
 
       async function api(path, options = {}) {
@@ -187,6 +241,34 @@ function adminPage(session) {
         }
       }
 
+      async function loadAdmins() {
+        adminRows.innerHTML = '<tr><td colspan="5">正在加载...</td></tr>';
+        try {
+          const data = await api("/api/admin/super-admins");
+          if (!data.admins.length) {
+            adminRows.innerHTML = '<tr><td colspan="5">还没有超级管理员。</td></tr>';
+            return;
+          }
+          adminRows.innerHTML = data.admins.map((item) => {
+            const status = item.enabled ? "启用" : "停用";
+            const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString() : "-";
+            const updatedAt = item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-";
+            return '<tr>' +
+              '<td>' + item.phone + '</td>' +
+              '<td><span class="badge ' + (item.enabled ? "ok" : "off") + '">' + status + '</span></td>' +
+              '<td>' + createdAt + '</td>' +
+              '<td>' + updatedAt + '</td>' +
+              '<td class="actions">' +
+                '<button class="ghost" type="button" data-admin-edit="' + item.phone + '" data-enabled="' + item.enabled + '">编辑</button>' +
+                '<button class="danger" type="button" data-admin-delete="' + item.phone + '">删除</button>' +
+              '</td>' +
+            '</tr>';
+          }).join("");
+        } catch (error) {
+          adminRows.innerHTML = '<tr><td colspan="5">' + error.message + '</td></tr>';
+        }
+      }
+
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const data = new FormData(form);
@@ -205,6 +287,27 @@ function adminPage(session) {
           await loadPhones();
         } catch (error) {
           showError(error.message);
+        }
+      });
+
+      adminForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const data = new FormData(adminForm);
+        const body = {
+          phone: data.get("phone"),
+          enabled: adminForm.elements.enabled.checked
+        };
+        const password = String(data.get("password") || "").trim();
+        if (password) body.password = password;
+        try {
+          await api("/api/admin/super-admins", {
+            method: "POST",
+            body: JSON.stringify(body)
+          });
+          resetAdminForm();
+          await loadAdmins();
+        } catch (error) {
+          showAdminError(error.message);
         }
       });
 
@@ -229,13 +332,37 @@ function adminPage(session) {
         }
       });
 
+      adminRows.addEventListener("click", async (event) => {
+        const editPhone = event.target.dataset.adminEdit;
+        const deletePhone = event.target.dataset.adminDelete;
+        if (editPhone) {
+          adminForm.elements.phone.value = editPhone;
+          adminForm.elements.password.value = "";
+          adminForm.elements.enabled.checked = event.target.dataset.enabled === "true";
+          adminFormTitle.textContent = "修改超级管理员";
+          adminForm.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        if (deletePhone) {
+          if (!confirm("确定删除超级管理员 " + deletePhone + " 吗？")) return;
+          try {
+            await api("/api/admin/super-admins?phone=" + encodeURIComponent(deletePhone), { method: "DELETE" });
+            await loadAdmins();
+          } catch (error) {
+            showAdminError(error.message);
+          }
+        }
+      });
+
       document.querySelector("#resetButton").addEventListener("click", resetForm);
       document.querySelector("#refreshButton").addEventListener("click", loadPhones);
+      document.querySelector("#adminResetButton").addEventListener("click", resetAdminForm);
+      document.querySelector("#adminRefreshButton").addEventListener("click", loadAdmins);
       document.querySelector("#logoutButton").addEventListener("click", async () => {
         await fetch("/api/auth/logout", { method: "POST" });
         location.href = "/admin";
       });
 
+      loadAdmins();
       loadPhones();
     </script>
   </body>
@@ -272,6 +399,7 @@ function baseStyles() {
     h1 { margin-bottom: 8px; font-size: clamp(24px, 5vw, 34px); }
     h2 { margin-bottom: 14px; font-size: 18px; }
     p { color: var(--muted); line-height: 1.55; }
+    .panel-copy { margin-bottom: 14px; font-size: 13px; }
     button, input { font: inherit; }
     button { min-height: 42px; border: 1px solid var(--accent); border-radius: 8px; padding: 0 14px; background: var(--accent); color: #fff; font-weight: 800; cursor: pointer; }
     input { width: 100%; height: 44px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; background: #fff; color: var(--ink); }

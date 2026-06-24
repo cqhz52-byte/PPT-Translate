@@ -166,6 +166,7 @@ h2 {
   padding: 0;
   font-size: 20px;
   font-weight: 800;
+  text-decoration: none;
 }
 
 .install-button {
@@ -176,7 +177,12 @@ h2 {
   color: var(--accent-2);
 }
 
-.install-icon {
+.admin-button {
+  color: var(--accent);
+}
+
+.install-icon,
+.admin-icon {
   width: 24px;
   height: 24px;
   fill: none;

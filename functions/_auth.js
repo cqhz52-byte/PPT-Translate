@@ -1,6 +1,7 @@
 const SESSION_COOKIE = "ppt_auth";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
-const ADMIN_PREFIX = "admin:";
+export const ADMIN_PREFIX = "admin:";
+export const MAX_SUPER_ADMINS = 2;
 const APP_SESSION_SECRET_KEY = "app:session_secret";
 
 export async function getSession(request, env) {
@@ -78,9 +79,38 @@ export async function verifyAuthorizedPhone(phone, pin, env) {
 }
 
 export async function hasSuperAdmin(env) {
-  if (!env.PHONE_AUTH_KV) return false;
-  const list = await env.PHONE_AUTH_KV.list({ prefix: ADMIN_PREFIX, limit: 1 });
-  return list.keys.length > 0;
+  return (await countSuperAdmins(env)) > 0;
+}
+
+export async function countSuperAdmins(env) {
+  if (!env.PHONE_AUTH_KV) return 0;
+  const list = await env.PHONE_AUTH_KV.list({ prefix: ADMIN_PREFIX });
+  return list.keys.length;
+}
+
+export async function listSuperAdmins(env) {
+  if (!env.PHONE_AUTH_KV) return [];
+  const list = await env.PHONE_AUTH_KV.list({ prefix: ADMIN_PREFIX });
+  const admins = [];
+
+  for (const key of list.keys) {
+    const value = await env.PHONE_AUTH_KV.get(key.name);
+    const phone = key.name.replace(new RegExp(`^${ADMIN_PREFIX}`), "");
+    let record = { enabled: true, createdAt: "", updatedAt: "" };
+    try {
+      const parsed = JSON.parse(value || "{}");
+      record = {
+        enabled: parsed.enabled !== false,
+        createdAt: parsed.createdAt || "",
+        updatedAt: parsed.updatedAt || "",
+      };
+    } catch {
+      record = { enabled: true, createdAt: "", updatedAt: "" };
+    }
+    admins.push({ phone, ...record });
+  }
+
+  return admins.sort((a, b) => a.phone.localeCompare(b.phone));
 }
 
 export async function createSuperAdmin(phone, password, env) {
