@@ -11,6 +11,7 @@ const state = {
   pdfBytes: null,
   batchFiles: [],
   batchRunning: false,
+  batchCancelRequested: false,
   translationRunning: false,
   translationAbortController: null,
   savedFiles: [],
@@ -97,7 +98,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=50").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=51").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
@@ -211,7 +212,7 @@ els.batchTranslateButton?.addEventListener("click", processBatchQueue);
 els.previewButton.addEventListener("click", openPreview);
 els.downloadButton.addEventListener("click", downloadPresentation);
 els.shareButton.addEventListener("click", sharePresentation);
-els.resetButton.addEventListener("click", () => resetApp());
+els.resetButton.addEventListener("click", handleResetButtonClick);
 els.helpButton?.addEventListener("click", openHelp);
 els.helpCloseButton?.addEventListener("click", closeHelp);
 els.previewCloseButton.addEventListener("click", closePreview);
@@ -914,6 +915,20 @@ function handleTranslateButtonClick() {
   translateAll();
 }
 
+async function handleResetButtonClick() {
+  if (els.resetButton.disabled) return;
+
+  state.batchCancelRequested = true;
+  cancelTranslation();
+  els.resetButton.disabled = true;
+
+  try {
+    await resetApp(true, { message: "已清空当前内容。", toast: true });
+  } finally {
+    els.resetButton.disabled = false;
+  }
+}
+
 function cancelTranslation() {
   if (!state.translationRunning) return;
   state.translationAbortController?.abort();
@@ -1066,11 +1081,13 @@ async function processBatchQueue() {
   const saved = [];
   const failed = [];
   state.batchRunning = true;
+  state.batchCancelRequested = false;
 
   try {
     setBusy(true, `正在批量翻译 0/${files.length}...`);
 
     for (let index = 0; index < files.length; index += 1) {
+      if (state.batchCancelRequested) break;
       const file = files[index];
       setProgress(index / files.length);
       setStatus(`批量处理中：${index + 1}/${files.length} · ${file.name}`);
@@ -1090,6 +1107,12 @@ async function processBatchQueue() {
         console.error("Batch file failed", file.name, error);
         failed.push(file.name);
       }
+    }
+
+    if (state.batchCancelRequested) {
+      state.batchFiles = [];
+      renderBatchQueue();
+      return;
     }
 
     state.batchFiles = [];
@@ -2534,7 +2557,14 @@ function openCurrentDraftDb() {
   });
 }
 
-function resetApp(clearInput = true, options = {}) {
+async function resetApp(clearInput = true, options = {}) {
+  window.clearTimeout(draftSaveTimer);
+  draftSaveTimer = 0;
+  state.translationAbortController?.abort();
+  state.translationAbortController = null;
+  state.translationRunning = false;
+  state.batchRunning = false;
+  state.batchCancelRequested = true;
   state.file = null;
   state.fileType = "";
   state.zip = null;
@@ -2544,12 +2574,19 @@ function resetApp(clearInput = true, options = {}) {
   state.pdfPageSizes = new Map();
   state.pdfTableCells = new Map();
   state.pdfBytes = null;
+  state.batchFiles = [];
   if (clearInput) els.fileInput.value = "";
   els.fileMeta.textContent = "支持 PPTX / DOCX / PDF；旧版 PPT/DOC 请先另存";
+  closePreview();
   renderSegments();
+  renderBatchQueue();
   updateStats();
+  setBusy(false);
+  setProgress(0);
   setStatus("请先选择一个 PPTX、DOCX 或 PDF 文件。");
-  if (options.clearDraft !== false) clearCurrentDraft();
+  if (options.message) setStatus(options.message);
+  if (options.clearDraft !== false) await clearCurrentDraft();
+  if (options.toast) showToast(options.message || "已清空当前内容。");
 }
 
 function buildOutputName(name) {
