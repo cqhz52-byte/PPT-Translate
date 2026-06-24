@@ -49,6 +49,56 @@ DEEPSEEK_API_KEY=你的 DeepSeek Key
 
 设置后页面的 API Key 输入框可以留空，后端会自动使用环境变量。
 
+## Cloudflare Pages 发布与手机号授权
+
+本项目包含 `functions/` 目录，部署到 Cloudflare Pages 后会自动启用 Pages Functions，用于手机号授权和 DeepSeek 翻译代理。
+
+在 Cloudflare Pages 项目中配置环境变量：
+
+```text
+AUTH_SESSION_SECRET=一段足够长的随机密钥
+DEEPSEEK_API_KEY=你的 DeepSeek Key
+AUTHORIZED_PHONES=13800138000,13900139000
+```
+
+如果希望“手机号 + 访问码/PIN”登录，改用：
+
+```text
+AUTHORIZED_USERS={"13800138000":"123456","13900139000":"654321"}
+```
+
+也可以使用逗号格式：
+
+```text
+AUTHORIZED_USERS=13800138000:123456,13900139000:654321
+```
+
+如果要在线管理手机号，可创建 Cloudflare KV 命名空间并绑定到 Pages Functions：
+
+```text
+PHONE_AUTH_KV
+ADMIN_TOKEN=一段管理员接口令牌
+```
+
+管理接口示例：
+
+```powershell
+# 查看手机号
+curl -H "Authorization: Bearer <ADMIN_TOKEN>" https://你的域名/api/admin/phones
+
+# 添加或更新手机号
+curl -X POST https://你的域名/api/admin/phones `
+  -H "Authorization: Bearer <ADMIN_TOKEN>" `
+  -H "Content-Type: application/json" `
+  -d "{\"phone\":\"13800138000\",\"pin\":\"123456\"}"
+
+# 删除手机号
+curl -X DELETE "https://你的域名/api/admin/phones?phone=13800138000" `
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+```
+
+注意：只校验“手机号”本身并不能证明使用者拥有这个号码，别人知道授权手机号也可能登录。更安全的做法是给每个手机号配置访问码/PIN；如果需要短信验证码，需要再接入短信服务商。
+
 启动后在电脑浏览器打开：
 
 ```text
