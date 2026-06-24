@@ -204,7 +204,11 @@ export function loginPage(message = "") {
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#165a72">
     <title>授权登录 - CuraWay 文档翻译工具</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
     <style>
       :root { color-scheme: light; --bg: #f6f8f7; --ink: #172321; --muted: #60706c; --line: #d7e0dc; --accent: #165a72; --danger: #b42318; }
       * { box-sizing: border-box; }
@@ -232,6 +236,10 @@ export function loginPage(message = "") {
       <p class="hint">手机号会在服务端校验；未授权用户不能调用翻译接口。超级用户请进入 <a href="/admin">管理后台</a>。</p>
     </main>
     <script>
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/sw.js?v=45").catch(() => {});
+      }
+
       document.querySelector("#loginForm").addEventListener("submit", async (event) => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
@@ -254,7 +262,7 @@ export function loginPage(message = "") {
     </script>
   </body>
 </html>`, {
-    status: 401,
+    status: 200,
     headers: { "Content-Type": "text/html; charset=utf-8" },
   });
 }

@@ -90,7 +90,7 @@ let isRestoringDraft = false;
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=44").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=45").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
