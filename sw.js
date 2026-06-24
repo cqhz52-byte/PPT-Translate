@@ -1,11 +1,11 @@
-const CACHE_NAME = "ppt-translator-pwa-v47";
+const CACHE_NAME = "ppt-translator-pwa-v48";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
-  "./styles.css?v=47",
+  "./styles.css?v=48",
   "./app.js",
-  "./app.js?v=47",
+  "./app.js?v=48",
   "./assets/curaway-logo.png",
   "./manifest.webmanifest",
   "./vendor/jszip.min.js",
@@ -28,6 +28,12 @@ self.addEventListener("activate", (event) => {
     )
   );
   self.clients.claim();
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener("fetch", (event) => {

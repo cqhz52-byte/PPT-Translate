@@ -90,7 +90,28 @@ let isRestoringDraft = false;
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=46").catch(() => {
+  let isServiceWorkerRefreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (isServiceWorkerRefreshing) return;
+    isServiceWorkerRefreshing = true;
+    window.location.reload();
+  });
+
+  navigator.serviceWorker.register("sw.js?v=48").then((registration) => {
+    registration.update().catch(() => {});
+    registration.addEventListener("updatefound", () => {
+      const worker = registration.installing;
+      if (!worker) return;
+      worker.addEventListener("statechange", () => {
+        if (worker.state === "installed" && navigator.serviceWorker.controller) {
+          worker.postMessage({ type: "SKIP_WAITING" });
+        }
+      });
+    });
+    if (registration.waiting) {
+      registration.waiting.postMessage({ type: "SKIP_WAITING" });
+    }
+  }).catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
