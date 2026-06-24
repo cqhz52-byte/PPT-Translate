@@ -97,7 +97,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=49").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=50").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
@@ -837,6 +837,7 @@ async function loadWordDocument() {
       if (!original) return;
       const leadingWhitespace = rawOriginal.match(/^\s*/)?.[0] || "";
       const trailingWhitespace = rawOriginal.match(/\s*$/)?.[0] || "";
+      const syntheticAlignment = detectWordSyntheticAlignment(path, paragraph, original, leadingWhitespace, trailingWhitespace);
 
       state.segments.push({
         id: `${path}-${paragraphIndex}`,
@@ -848,6 +849,7 @@ async function loadWordDocument() {
         textNodeCount: textNodes.length,
         wordLeadingWhitespace: leadingWhitespace,
         wordTrailingWhitespace: trailingWhitespace,
+        wordSyntheticAlignment: syntheticAlignment,
         overrides: createSegmentOverrides(),
         original,
         translation: "",
@@ -1446,19 +1448,43 @@ function writeWordSegments(doc, segments) {
     const textNodes = [...paragraph.getElementsByTagNameNS(WORD_NS, "t")];
     if (!textNodes.length) return;
 
+    if (segment.wordSyntheticAlignment) {
+      applyWordParagraphJustification(paragraph, segment.wordSyntheticAlignment);
+    }
     writeWordTextNodes(textNodes, segment);
   });
 }
 
 function writeWordTextNodes(textNodes, segment) {
   const translation = segment.translation.trim();
-  const text = `${segment.wordLeadingWhitespace || ""}${translation}${segment.wordTrailingWhitespace || ""}`;
+  const originalTexts = textNodes.map((node) => node.textContent || "");
+  const firstContentIndex = originalTexts.findIndex((text) => text.trim());
+  const shouldUseContentRuns = Boolean(segment.wordSyntheticAlignment) && firstContentIndex >= 0;
+  const activeTextNodes = shouldUseContentRuns
+    ? textNodes.filter((node, index) => originalTexts[index].trim())
+    : textNodes;
+  const text = shouldUseContentRuns
+    ? translation
+    : `${segment.wordLeadingWhitespace || ""}${translation}${segment.wordTrailingWhitespace || ""}`;
   const characters = [...text];
-  const originalLengths = textNodes.map((node) => [...(node.textContent || "")].length);
+  const originalLengths = activeTextNodes.map((node) => [...(node.textContent || "")].length);
   const hasOriginalText = originalLengths.some((length) => length > 0);
 
+  if (shouldUseContentRuns) {
+    for (let index = 0; index < textNodes.length; index += 1) {
+      if (originalTexts[index].trim()) continue;
+      textNodes[index].textContent = "";
+      updateWordTextSpacePreserve(textNodes[index]);
+    }
+  }
+
+  writeWordTextIntoNodes(activeTextNodes, characters, originalLengths, hasOriginalText);
+}
+
+function writeWordTextIntoNodes(textNodes, characters, originalLengths, hasOriginalText) {
   if (!hasOriginalText) {
-    textNodes[0].textContent = text;
+    textNodes[0].textContent = characters.join("");
+    normalizeWordTextRunForTranslation(textNodes[0]);
     updateWordTextSpacePreserve(textNodes[0]);
     clearRemainingTextNodes(textNodes);
     return;
@@ -1471,8 +1497,77 @@ function writeWordTextNodes(textNodes, segment) {
     const take = isLast ? characters.length - offset : Math.min(originalLength, characters.length - offset);
     node.textContent = take > 0 ? characters.slice(offset, offset + take).join("") : "";
     offset += Math.max(0, take);
+    normalizeWordTextRunForTranslation(node);
     updateWordTextSpacePreserve(node);
   });
+}
+
+function detectWordSyntheticAlignment(path, paragraph, original, leadingWhitespace, trailingWhitespace) {
+  if (!/^word\/header\d+\.xml$/.test(path)) return "";
+  if (getWordParagraphJustification(paragraph)) return "";
+
+  if (leadingWhitespace.length >= 20 && !trailingWhitespace) {
+    return "right";
+  }
+  if (leadingWhitespace && trailingWhitespace && original.length >= 6) {
+    return "center";
+  }
+  return "";
+}
+
+function getWordParagraphJustification(paragraph) {
+  const pPr = getWordDirectChild(paragraph, "pPr");
+  if (!pPr) return "";
+  const jc = getWordDirectChild(pPr, "jc");
+  return jc?.getAttributeNS(WORD_NS, "val") || jc?.getAttribute("w:val") || jc?.getAttribute("val") || "";
+}
+
+function applyWordParagraphJustification(paragraph, alignment) {
+  const pPr = getOrCreateWordDirectChild(paragraph, "pPr", paragraph.firstChild);
+  const jc = getOrCreateWordDirectChild(pPr, "jc");
+  jc.setAttributeNS(WORD_NS, "w:val", alignment);
+  if (pPr.parentNode !== paragraph) {
+    paragraph.insertBefore(pPr, paragraph.firstChild);
+  }
+}
+
+function normalizeWordTextRunForTranslation(textNode) {
+  const text = textNode.textContent || "";
+  if (!/[A-Za-z]/.test(text)) return;
+  const run = getWordAncestor(textNode, "r");
+  if (!run) return;
+  const rPr = getOrCreateWordDirectChild(run, "rPr", run.firstChild);
+  const sz = getWordDirectChild(rPr, "sz");
+  const szCs = getWordDirectChild(rPr, "szCs");
+  const szValue = sz?.getAttributeNS(WORD_NS, "val") || sz?.getAttribute("w:val") || sz?.getAttribute("val");
+  const szCsValue = szCs?.getAttributeNS(WORD_NS, "val") || szCs?.getAttribute("w:val") || szCs?.getAttribute("val");
+
+  if (!szValue && szCsValue) {
+    const nextSz = textNode.ownerDocument.createElementNS(WORD_NS, "w:sz");
+    nextSz.setAttributeNS(WORD_NS, "w:val", szCsValue);
+    rPr.insertBefore(nextSz, szCs || rPr.firstChild);
+  }
+}
+
+function getWordAncestor(node, localName) {
+  let current = node?.parentNode || null;
+  while (current) {
+    if (current.namespaceURI === WORD_NS && current.localName === localName) return current;
+    current = current.parentNode;
+  }
+  return null;
+}
+
+function getWordDirectChild(node, localName) {
+  return [...node.childNodes].find((child) => child.namespaceURI === WORD_NS && child.localName === localName) || null;
+}
+
+function getOrCreateWordDirectChild(node, localName, beforeNode = null) {
+  const existing = getWordDirectChild(node, localName);
+  if (existing) return existing;
+  const child = node.ownerDocument.createElementNS(WORD_NS, `w:${localName}`);
+  node.insertBefore(child, beforeNode || null);
+  return child;
 }
 
 function updateWordTextSpacePreserve(textNode) {
