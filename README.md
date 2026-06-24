@@ -51,36 +51,41 @@ DEEPSEEK_API_KEY=你的 DeepSeek Key
 
 ## Cloudflare Pages 发布与手机号授权
 
-本项目包含 `functions/` 目录，部署到 Cloudflare Pages 后会自动启用 Pages Functions，用于手机号授权和 DeepSeek 翻译代理。
+本项目包含 `functions/` 目录，部署到 Cloudflare Pages 后会自动启用 Pages Functions，用于手机号授权、超级用户后台和 DeepSeek 翻译代理。
 
-在 Cloudflare Pages 项目中配置环境变量：
-
-```text
-AUTH_SESSION_SECRET=一段足够长的随机密钥
-DEEPSEEK_API_KEY=你的 DeepSeek Key
-AUTHORIZED_PHONES=13800138000,13900139000
-```
-
-如果希望“手机号 + 访问码/PIN”登录，改用：
-
-```text
-AUTHORIZED_USERS={"13800138000":"123456","13900139000":"654321"}
-```
-
-也可以使用逗号格式：
-
-```text
-AUTHORIZED_USERS=13800138000:123456,13900139000:654321
-```
-
-如果要在线管理手机号，可创建 Cloudflare KV 命名空间并绑定到 Pages Functions：
+推荐方式是在 Cloudflare 里只做一次 KV 绑定，以后都在网页后台管理授权手机号：
 
 ```text
 PHONE_AUTH_KV
-ADMIN_TOKEN=一段管理员接口令牌
 ```
 
-管理接口示例：
+部署后打开：
+
+```text
+https://你的域名/admin
+```
+
+如果是第一次打开，会显示“创建超级用户”。创建后这个初始化入口会自动关闭，之后只能用超级用户手机号和密码登录后台。
+
+超级用户后台支持：
+
+- 添加授权手机号
+- 给授权手机号设置登录密码
+- 修改授权手机号密码
+- 启用或停用授权手机号
+- 删除授权手机号
+
+普通用户访问应用时，需要输入后台已授权的手机号和密码。超级用户登录 `/admin` 后也可以直接打开应用使用。
+
+如果你想让后端统一使用自己的 DeepSeek Key，可以在 Cloudflare Pages 环境变量里设置：
+
+```text
+DEEPSEEK_API_KEY=你的 DeepSeek Key
+```
+
+如果不设置，用户仍可在页面里临时输入 DeepSeek Key。
+
+可选：如果你想继续用命令行管理，也可以设置 `ADMIN_TOKEN`，然后调用管理接口：
 
 ```powershell
 # 查看手机号
@@ -90,14 +95,16 @@ curl -H "Authorization: Bearer <ADMIN_TOKEN>" https://你的域名/api/admin/pho
 curl -X POST https://你的域名/api/admin/phones `
   -H "Authorization: Bearer <ADMIN_TOKEN>" `
   -H "Content-Type: application/json" `
-  -d "{\"phone\":\"13800138000\",\"pin\":\"123456\"}"
+  -d "{\"phone\":\"13800138000\",\"password\":\"123456\"}"
 
 # 删除手机号
 curl -X DELETE "https://你的域名/api/admin/phones?phone=13800138000" `
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
-注意：只校验“手机号”本身并不能证明使用者拥有这个号码，别人知道授权手机号也可能登录。更安全的做法是给每个手机号配置访问码/PIN；如果需要短信验证码，需要再接入短信服务商。
+兼容旧方式：仍可使用环境变量 `AUTHORIZED_PHONES` 或 `AUTHORIZED_USERS` 配置固定白名单，但这不适合经常增删用户。
+
+注意：只校验“手机号”本身并不能证明使用者拥有这个号码，别人知道授权手机号也可能登录。更安全的做法是给每个手机号配置密码；如果需要短信验证码，需要再接入短信服务商。
 
 启动后在电脑浏览器打开：
 

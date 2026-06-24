@@ -1,5 +1,7 @@
 const SESSION_COOKIE = "ppt_auth";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
+const ADMIN_PREFIX = "admin:";
+const APP_SESSION_SECRET_KEY = "app:session_secret";
 
 export async function getSession(request, env) {
   const cookie = getCookie(request, SESSION_COOKIE);
@@ -8,7 +10,7 @@ export async function getSession(request, env) {
   const [payload, signature] = cookie.split(".");
   if (!payload || !signature) return null;
 
-  const expected = await sign(payload, getSessionSecret(env));
+  const expected = await sign(payload, await getSessionSecret(env));
   if (!timingSafeEqual(signature, expected)) return null;
 
   try {
@@ -23,9 +25,27 @@ export async function getSession(request, env) {
 export async function createSessionCookie(phone, env) {
   const payload = base64UrlEncode(JSON.stringify({
     phone,
+    role: "user",
     exp: Date.now() + SESSION_MAX_AGE * 1000,
   }));
-  const signature = await sign(payload, getSessionSecret(env));
+  const signature = await sign(payload, await getSessionSecret(env));
+  return [
+    `${SESSION_COOKIE}=${payload}.${signature}`,
+    "Path=/",
+    `Max-Age=${SESSION_MAX_AGE}`,
+    "HttpOnly",
+    "Secure",
+    "SameSite=Lax",
+  ].join("; ");
+}
+
+export async function createAdminSessionCookie(phone, env) {
+  const payload = base64UrlEncode(JSON.stringify({
+    phone,
+    role: "admin",
+    exp: Date.now() + SESSION_MAX_AGE * 1000,
+  }));
+  const signature = await sign(payload, await getSessionSecret(env));
   return [
     `${SESSION_COOKIE}=${payload}.${signature}`,
     "Path=/",
@@ -57,6 +77,55 @@ export async function verifyAuthorizedPhone(phone, pin, env) {
   return { ok: false, error: "该手机号未授权使用。" };
 }
 
+export async function hasSuperAdmin(env) {
+  if (!env.PHONE_AUTH_KV) return false;
+  const list = await env.PHONE_AUTH_KV.list({ prefix: ADMIN_PREFIX, limit: 1 });
+  return list.keys.length > 0;
+}
+
+export async function createSuperAdmin(phone, password, env) {
+  if (!env.PHONE_AUTH_KV) return { ok: false, error: "PHONE_AUTH_KV is not bound." };
+  const normalized = normalizePhone(phone);
+  if (!normalized) return { ok: false, error: "请输入有效手机号。" };
+  if (String(password || "").length < 6) return { ok: false, error: "超级用户密码至少 6 位。" };
+  if (await hasSuperAdmin(env)) return { ok: false, error: "超级用户已经存在，请直接登录。" };
+
+  await env.PHONE_AUTH_KV.put(`${ADMIN_PREFIX}${normalized}`, JSON.stringify({
+    enabled: true,
+    passwordHash: await hashSecret(password),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }));
+
+  return { ok: true, phone: normalized };
+}
+
+export async function verifySuperAdmin(phone, password, env) {
+  if (!env.PHONE_AUTH_KV) return { ok: false, error: "PHONE_AUTH_KV is not bound." };
+  const normalized = normalizePhone(phone);
+  if (!normalized) return { ok: false, error: "请输入有效手机号。" };
+
+  const value = await env.PHONE_AUTH_KV.get(`${ADMIN_PREFIX}${normalized}`);
+  if (!value) return { ok: false, error: "超级用户不存在或手机号不正确。" };
+
+  let record = null;
+  try {
+    record = JSON.parse(value);
+  } catch {
+    record = { password: value, enabled: true };
+  }
+
+  if (record.enabled === false) return { ok: false, error: "该超级用户已停用。" };
+  const verified = await verifyStoredSecret(password, record.passwordHash || record.pinHash || record.password || record.pin || record.code);
+  if (!verified) return { ok: false, error: "超级用户密码不正确。" };
+  return { ok: true, phone: normalized };
+}
+
+export async function requireAdminSession(request, env) {
+  const session = await getSession(request, env);
+  return session?.role === "admin" ? session : null;
+}
+
 export function normalizePhone(value) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -66,11 +135,26 @@ export function normalizePhone(value) {
   return hasPlus ? `+${digits}` : digits;
 }
 
-export function requireAdmin(request, env) {
+export function requireAdminToken(request, env) {
   const expected = String(env.ADMIN_TOKEN || "").trim();
   if (!expected) return false;
   const header = request.headers.get("Authorization") || "";
   return header === `Bearer ${expected}`;
+}
+
+export async function hashSecret(secret) {
+  const salt = randomId(16);
+  const digest = await sha256(`${salt}:${String(secret || "")}`);
+  return `sha256:${salt}:${digest}`;
+}
+
+export async function verifyStoredSecret(input, stored) {
+  const secret = String(stored || "").trim();
+  if (!secret) return !String(input || "").trim();
+  if (!secret.startsWith("sha256:")) return String(input || "").trim() === secret;
+  const [, salt, digest] = secret.split(":");
+  if (!salt || !digest) return false;
+  return timingSafeEqual(await sha256(`${salt}:${String(input || "")}`), digest);
 }
 
 export function json(payload, status = 200, headers = {}) {
@@ -115,7 +199,7 @@ export function loginPage(message = "") {
         <button type="submit">进入应用</button>
         <div class="error" id="errorText">${safeMessage}</div>
       </form>
-      <p class="hint">手机号会在服务端校验；未授权用户不能调用翻译接口。</p>
+      <p class="hint">手机号会在服务端校验；未授权用户不能调用翻译接口。超级用户请进入 <a href="/admin">管理后台</a>。</p>
     </main>
     <script>
       document.querySelector("#loginForm").addEventListener("submit", async (event) => {
@@ -179,19 +263,26 @@ function readPhoneFromEnv(phone, env) {
   return null;
 }
 
-function verifyPhoneRecord(phone, pin, record) {
+async function verifyPhoneRecord(phone, pin, record) {
   if (record.enabled === false) return { ok: false, error: "该手机号已停用。" };
-  const expectedPin = String(record.pin || record.code || "").trim();
-  if (expectedPin && String(pin || "").trim() !== expectedPin) {
+  const expectedPin = record.pinHash || record.passwordHash || record.pin || record.code || "";
+  if (!(await verifyStoredSecret(pin, expectedPin))) {
     return { ok: false, error: "访问码不正确。" };
   }
   return { ok: true, phone };
 }
 
-function getSessionSecret(env) {
+async function getSessionSecret(env) {
   const secret = String(env.AUTH_SESSION_SECRET || "").trim();
-  if (!secret) throw new Error("Missing AUTH_SESSION_SECRET");
-  return secret;
+  if (secret) return secret;
+  if (!env.PHONE_AUTH_KV) throw new Error("Missing AUTH_SESSION_SECRET or PHONE_AUTH_KV");
+
+  const stored = await env.PHONE_AUTH_KV.get(APP_SESSION_SECRET_KEY);
+  if (stored) return stored;
+
+  const generated = randomId(32);
+  await env.PHONE_AUTH_KV.put(APP_SESSION_SECRET_KEY, generated);
+  return generated;
 }
 
 async function sign(payload, secret) {
@@ -237,6 +328,17 @@ function base64UrlDecode(value) {
   const binary = atob(padded);
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
   return new TextDecoder().decode(bytes);
+}
+
+async function sha256(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return base64UrlEncodeBytes(new Uint8Array(digest));
+}
+
+function randomId(length) {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return base64UrlEncodeBytes(bytes);
 }
 
 function escapeHtml(value) {
