@@ -237,7 +237,7 @@ export function loginPage(message = "") {
     </main>
     <script>
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/sw.js?v=45").catch(() => {});
+        navigator.serviceWorker.register("/sw.js?v=46").catch(() => {});
       }
 
       document.querySelector("#loginForm").addEventListener("submit", async (event) => {

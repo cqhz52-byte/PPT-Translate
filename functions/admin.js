@@ -99,6 +99,19 @@ function adminPage(session) {
       </header>
 
       <section class="panel">
+        <h2>DeepSeek 云端 Key</h2>
+        <p class="panel-copy" id="deepseekKeyStatus">正在检查 Key 状态...</p>
+        <form id="deepseekKeyForm" class="key-form">
+          <label>DeepSeek API Key <input name="apiKey" type="password" autocomplete="off" placeholder="输入后保存到 Cloudflare，仅后端使用"></label>
+          <div class="form-actions">
+            <button type="submit">保存 Key</button>
+            <button class="ghost" id="clearDeepseekKeyButton" type="button">清除 Key</button>
+          </div>
+          <div class="error" id="deepseekKeyError"></div>
+        </form>
+      </section>
+
+      <section class="panel">
         <h2 id="adminFormTitle">添加超级管理员</h2>
         <p class="panel-copy">最多可设置 2 个超级管理员。第二个超级管理员必须由已登录的超级管理员添加。</p>
         <form id="adminForm" class="user-form">
@@ -185,15 +198,36 @@ function adminPage(session) {
       const adminRows = document.querySelector("#adminRows");
       const adminErrorText = document.querySelector("#adminErrorText");
       const adminFormTitle = document.querySelector("#adminFormTitle");
+      const deepseekKeyForm = document.querySelector("#deepseekKeyForm");
+      const deepseekKeyStatus = document.querySelector("#deepseekKeyStatus");
+      const deepseekKeyError = document.querySelector("#deepseekKeyError");
+      let phoneItems = [];
+      let adminItems = [];
 
-      function showError(message) {
+      function showError(message, isSuccess = false) {
         errorText.textContent = message || "";
         errorText.style.display = message ? "block" : "none";
+        errorText.classList.toggle("success", Boolean(isSuccess));
       }
 
-      function showAdminError(message) {
+      function showAdminError(message, isSuccess = false) {
         adminErrorText.textContent = message || "";
         adminErrorText.style.display = message ? "block" : "none";
+        adminErrorText.classList.toggle("success", Boolean(isSuccess));
+      }
+
+      function showDeepseekKeyError(message, isSuccess = false) {
+        deepseekKeyError.textContent = message || "";
+        deepseekKeyError.style.display = message ? "block" : "none";
+        deepseekKeyError.classList.toggle("success", Boolean(isSuccess));
+      }
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
       }
 
       function resetForm() {
@@ -223,60 +257,113 @@ function adminPage(session) {
         return payload;
       }
 
+      async function loadDeepseekKeyStatus() {
+        try {
+          const data = await api("/api/admin/deepseek-key");
+          if (data.hasKey) {
+            deepseekKeyStatus.textContent = data.source === "cloudflare-secret"
+              ? "已配置 Cloudflare Pages Secret：DEEPSEEK_API_KEY。"
+              : "已保存 DeepSeek Key 到 Cloudflare KV，用户可在应用里留空 API Key。";
+          } else {
+            deepseekKeyStatus.textContent = "尚未配置 DeepSeek Key；用户需要在应用里临时输入 API Key。";
+          }
+        } catch (error) {
+          deepseekKeyStatus.textContent = error.message || "Key 状态读取失败。";
+        }
+      }
+
       async function loadPhones() {
         rows.innerHTML = '<tr><td colspan="5">正在加载...</td></tr>';
         try {
           const data = await api("/api/admin/phones");
-          if (!data.phones.length) {
-            rows.innerHTML = '<tr><td colspan="5">还没有授权用户。</td></tr>';
-            return;
-          }
-          rows.innerHTML = data.phones.map((item) => {
-            const status = item.enabled ? "启用" : "停用";
-            const password = item.hasPassword ? "已设置" : "未设置";
-            const updatedAt = item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-";
-            return '<tr>' +
-              '<td>' + item.phone + '</td>' +
-              '<td><span class="badge ' + (item.enabled ? "ok" : "off") + '">' + status + '</span></td>' +
-              '<td>' + password + '</td>' +
-              '<td>' + updatedAt + '</td>' +
-              '<td class="actions">' +
-                '<button class="ghost" type="button" data-edit="' + item.phone + '" data-enabled="' + item.enabled + '">编辑</button>' +
-                '<button class="danger" type="button" data-delete="' + item.phone + '">删除</button>' +
-              '</td>' +
-            '</tr>';
-          }).join("");
+          phoneItems = data.phones || [];
+          renderPhoneRows();
         } catch (error) {
           rows.innerHTML = '<tr><td colspan="5">' + error.message + '</td></tr>';
         }
+      }
+
+      function renderPhoneRows() {
+        if (!phoneItems.length) {
+          rows.innerHTML = '<tr><td colspan="5">还没有授权用户。</td></tr>';
+          return;
+        }
+        rows.innerHTML = phoneItems.map((item) => {
+          const status = item.enabled ? "启用" : "停用";
+          const password = item.hasPassword ? "已设置" : "未设置";
+          const updatedAt = item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-";
+          const phone = escapeHtml(item.phone);
+          return '<tr data-phone-row="' + phone + '">' +
+            '<td>' + phone + '</td>' +
+            '<td><span class="badge ' + (item.enabled ? "ok" : "off") + '">' + status + '</span></td>' +
+            '<td>' + password + '</td>' +
+            '<td>' + updatedAt + '</td>' +
+            '<td class="actions">' +
+              '<button class="ghost" type="button" data-edit="' + phone + '" data-enabled="' + item.enabled + '">编辑</button>' +
+              '<button class="danger" type="button" data-delete="' + phone + '">删除</button>' +
+            '</td>' +
+          '</tr>';
+        }).join("");
+      }
+
+      function upsertPhoneItem(item) {
+        const phone = String(item.phone || "").trim();
+        if (!phone) return;
+        phoneItems = phoneItems.filter((existing) => existing.phone !== phone);
+        phoneItems.unshift({
+          phone,
+          enabled: item.enabled !== false,
+          hasPassword: Boolean(item.hasPassword),
+          updatedAt: item.updatedAt || new Date().toISOString()
+        });
+        renderPhoneRows();
       }
 
       async function loadAdmins() {
         adminRows.innerHTML = '<tr><td colspan="5">正在加载...</td></tr>';
         try {
           const data = await api("/api/admin/super-admins");
-          if (!data.admins.length) {
-            adminRows.innerHTML = '<tr><td colspan="5">还没有超级管理员。</td></tr>';
-            return;
-          }
-          adminRows.innerHTML = data.admins.map((item) => {
-            const status = item.enabled ? "启用" : "停用";
-            const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString() : "-";
-            const updatedAt = item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-";
-            return '<tr>' +
-              '<td>' + item.phone + '</td>' +
-              '<td><span class="badge ' + (item.enabled ? "ok" : "off") + '">' + status + '</span></td>' +
-              '<td>' + createdAt + '</td>' +
-              '<td>' + updatedAt + '</td>' +
-              '<td class="actions">' +
-                '<button class="ghost" type="button" data-admin-edit="' + item.phone + '" data-enabled="' + item.enabled + '">编辑</button>' +
-                '<button class="danger" type="button" data-admin-delete="' + item.phone + '">删除</button>' +
-              '</td>' +
-            '</tr>';
-          }).join("");
+          adminItems = data.admins || [];
+          renderAdminRows();
         } catch (error) {
           adminRows.innerHTML = '<tr><td colspan="5">' + error.message + '</td></tr>';
         }
+      }
+
+      function renderAdminRows() {
+        if (!adminItems.length) {
+          adminRows.innerHTML = '<tr><td colspan="5">还没有超级管理员。</td></tr>';
+          return;
+        }
+        adminRows.innerHTML = adminItems.map((item) => {
+          const status = item.enabled ? "启用" : "停用";
+          const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString() : "-";
+          const updatedAt = item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-";
+          const phone = escapeHtml(item.phone);
+          return '<tr data-admin-row="' + phone + '">' +
+            '<td>' + phone + '</td>' +
+            '<td><span class="badge ' + (item.enabled ? "ok" : "off") + '">' + status + '</span></td>' +
+            '<td>' + createdAt + '</td>' +
+            '<td>' + updatedAt + '</td>' +
+            '<td class="actions">' +
+              '<button class="ghost" type="button" data-admin-edit="' + phone + '" data-enabled="' + item.enabled + '">编辑</button>' +
+              '<button class="danger" type="button" data-admin-delete="' + phone + '">删除</button>' +
+            '</td>' +
+          '</tr>';
+        }).join("");
+      }
+
+      function upsertAdminItem(item) {
+        const phone = String(item.phone || "").trim();
+        if (!phone) return;
+        adminItems = adminItems.filter((existing) => existing.phone !== phone);
+        adminItems.unshift({
+          phone,
+          enabled: item.enabled !== false,
+          createdAt: item.createdAt || new Date().toISOString(),
+          updatedAt: item.updatedAt || new Date().toISOString()
+        });
+        renderAdminRows();
       }
 
       form.addEventListener("submit", async (event) => {
@@ -295,12 +382,14 @@ function adminPage(session) {
         if (password) body.password = password;
         if (passwordConfirm) body.passwordConfirm = passwordConfirm;
         try {
-          await api("/api/admin/phones", {
+          const result = await api("/api/admin/phones", {
             method: "POST",
             body: JSON.stringify(body)
           });
+          upsertPhoneItem(result.user || { phone: body.phone, enabled: body.enabled, hasPassword: Boolean(body.password) });
           resetForm();
-          await loadPhones();
+          showError("已保存授权用户。", true);
+          setTimeout(loadPhones, 1800);
         } catch (error) {
           showError(error.message);
         }
@@ -322,12 +411,14 @@ function adminPage(session) {
         if (password) body.password = password;
         if (passwordConfirm) body.passwordConfirm = passwordConfirm;
         try {
-          await api("/api/admin/super-admins", {
+          const result = await api("/api/admin/super-admins", {
             method: "POST",
             body: JSON.stringify(body)
           });
+          upsertAdminItem(result.admin || { phone: body.phone, enabled: body.enabled });
           resetAdminForm();
-          await loadAdmins();
+          showAdminError("已保存超级管理员。", true);
+          setTimeout(loadAdmins, 1800);
         } catch (error) {
           showAdminError(error.message);
         }
@@ -348,7 +439,9 @@ function adminPage(session) {
           if (!confirm("确定删除 " + deletePhone + " 的授权吗？")) return;
           try {
             await api("/api/admin/phones?phone=" + encodeURIComponent(deletePhone), { method: "DELETE" });
-            await loadPhones();
+            phoneItems = phoneItems.filter((item) => item.phone !== deletePhone);
+            renderPhoneRows();
+            setTimeout(loadPhones, 1200);
           } catch (error) {
             showError(error.message);
           }
@@ -370,7 +463,9 @@ function adminPage(session) {
           if (!confirm("确定删除超级管理员 " + deletePhone + " 吗？")) return;
           try {
             await api("/api/admin/super-admins?phone=" + encodeURIComponent(deletePhone), { method: "DELETE" });
-            await loadAdmins();
+            adminItems = adminItems.filter((item) => item.phone !== deletePhone);
+            renderAdminRows();
+            setTimeout(loadAdmins, 1200);
           } catch (error) {
             showAdminError(error.message);
           }
@@ -381,11 +476,37 @@ function adminPage(session) {
       document.querySelector("#refreshButton").addEventListener("click", loadPhones);
       document.querySelector("#adminResetButton").addEventListener("click", resetAdminForm);
       document.querySelector("#adminRefreshButton").addEventListener("click", loadAdmins);
+      deepseekKeyForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const apiKey = String(new FormData(deepseekKeyForm).get("apiKey") || "").trim();
+        try {
+          await api("/api/admin/deepseek-key", {
+            method: "POST",
+            body: JSON.stringify({ apiKey })
+          });
+          deepseekKeyForm.reset();
+          showDeepseekKeyError("DeepSeek Key 已保存。", true);
+          await loadDeepseekKeyStatus();
+        } catch (error) {
+          showDeepseekKeyError(error.message);
+        }
+      });
+      document.querySelector("#clearDeepseekKeyButton").addEventListener("click", async () => {
+        if (!confirm("确定清除 Cloudflare KV 中保存的 DeepSeek Key 吗？")) return;
+        try {
+          await api("/api/admin/deepseek-key", { method: "DELETE" });
+          showDeepseekKeyError("DeepSeek Key 已清除。", true);
+          await loadDeepseekKeyStatus();
+        } catch (error) {
+          showDeepseekKeyError(error.message);
+        }
+      });
       document.querySelector("#logoutButton").addEventListener("click", async () => {
         await fetch("/api/auth/logout", { method: "POST" });
         location.href = "/admin";
       });
 
+      loadDeepseekKeyStatus();
       loadAdmins();
       loadPhones();
     </script>
@@ -433,12 +554,14 @@ function baseStyles() {
     .auth-card form { display: grid; gap: 12px; }
     .hint { margin-top: 14px; font-size: 12px; }
     .error { display: none; margin-top: 10px; color: var(--danger); font-size: 13px; font-weight: 800; }
+    .error.success { color: var(--accent-2); }
     .shell { width: min(1120px, calc(100% - 28px)); margin: 0 auto; padding: 24px 0 40px; }
     .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
     .top-actions, .form-actions, .section-head, .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .panel { margin-top: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
     .section-head { justify-content: space-between; margin-bottom: 10px; }
     .user-form { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(160px, 1fr) auto; gap: 12px; align-items: end; }
+    .key-form { display: grid; grid-template-columns: minmax(240px, 1fr) auto; gap: 12px; align-items: end; }
     .check { display: flex; align-items: center; gap: 8px; height: 44px; }
     .check input { width: 18px; height: 18px; }
     .form-actions { grid-column: 1 / -1; }
@@ -456,6 +579,7 @@ function baseStyles() {
       .top-actions { width: 100%; }
       .top-actions .ghost, .top-actions button { flex: 1; }
       .user-form { grid-template-columns: 1fr; }
+      .key-form { grid-template-columns: 1fr; }
       .form-actions button { flex: 1; }
       .panel { padding: 14px; }
     }

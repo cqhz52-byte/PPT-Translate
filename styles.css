@@ -762,6 +762,34 @@ td:first-child {
   border-left-color: var(--danger);
 }
 
+.completion-dialog {
+  width: min(360px, calc(100vw - 32px));
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+}
+
+.completion-dialog::backdrop {
+  background: rgba(15, 25, 23, 0.32);
+}
+
+.completion-card {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.completion-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
 .preview-dialog,
 .help-dialog {
   width: min(1120px, calc(100vw - 28px));

@@ -64,7 +64,7 @@ const els = {
 };
 
 const slidePathPattern = /^ppt\/slides\/slide(\d+)\.xml$/;
-const wordPathPattern = /^word\/(?:document|header\d+|footer\d+|footnotes|endnotes|comments)\.xml$/;
+const wordPathPattern = /^word\/(?:document|footnotes|endnotes|comments)\.xml$/;
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
@@ -90,7 +90,7 @@ let isRestoringDraft = false;
 loadSettings();
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js?v=45").catch(() => {
+  navigator.serviceWorker.register("sw.js?v=46").catch(() => {
     showToast("PWA 缓存注册失败，应用仍可在浏览器中使用。", true);
   });
 }
@@ -112,7 +112,10 @@ window.addEventListener("beforeinstallprompt", (event) => {
 });
 
 els.installButton.addEventListener("click", async () => {
-  if (!state.installPrompt) return;
+  if (!state.installPrompt) {
+    showToast("????????????????????????????????????????/???????");
+    return;
+  }
   state.installPrompt.prompt();
   await state.installPrompt.userChoice;
   state.installPrompt = null;
@@ -806,6 +809,7 @@ async function loadWordDocument() {
     const partLabel = getWordPartLabel(path);
     const paragraphs = [...doc.getElementsByTagNameNS(WORD_NS, "p")];
     paragraphs.forEach((paragraph, paragraphIndex) => {
+      if (hasWordField(paragraph)) return;
       const textNodes = [...paragraph.getElementsByTagNameNS(WORD_NS, "t")];
       const original = textNodes.map((node) => node.textContent || "").join("").trim();
       if (!original) return;
@@ -1411,6 +1415,7 @@ function writeWordSegments(doc, segments) {
   segments.forEach((segment) => {
     const paragraph = paragraphs[segment.paragraphIndex];
     if (!paragraph || !segment.translation.trim()) return;
+    if (hasWordField(paragraph)) return;
 
     const textNodes = [...paragraph.getElementsByTagNameNS(WORD_NS, "t")];
     if (!textNodes.length) return;
@@ -1419,6 +1424,12 @@ function writeWordSegments(doc, segments) {
     normalizeWordRunStyle(textNodes[0], segment);
     clearRemainingTextNodes(textNodes);
   });
+}
+
+function hasWordField(paragraph) {
+  return [...paragraph.getElementsByTagName("*")].some((node) =>
+    ["fldChar", "instrText", "fldSimple"].includes(node.localName)
+  );
 }
 
 function clearRemainingTextNodes(textNodes) {
@@ -3033,6 +3044,28 @@ function showToast(message, isError = false) {
   toast.textContent = message;
   document.body.append(toast);
   window.setTimeout(() => toast.remove(), 4200);
+}
+
+function showCompletionDialog(title, message) {
+  const dialog = document.createElement("dialog");
+  dialog.className = "completion-dialog";
+  dialog.innerHTML = `
+    <form method="dialog" class="completion-card">
+      <h2></h2>
+      <p></p>
+      <button class="primary" value="ok">???</button>
+    </form>
+  `;
+  dialog.querySelector("h2").textContent = title;
+  dialog.querySelector("p").textContent = message;
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove());
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else {
+    window.alert(`${title}\n${message}`);
+    dialog.remove();
+  }
 }
 
 function getDirectionConfig(value) {

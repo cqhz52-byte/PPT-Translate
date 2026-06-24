@@ -8,7 +8,8 @@ export async function onRequestPost({ request, env }) {
   try {
     const body = await request.json().catch(() => ({}));
     const apiBase = String(body.apiBase || "https://api.deepseek.com").replace(/\/$/, "");
-    const apiKey = String(body.apiKey || env.DEEPSEEK_API_KEY || "").trim();
+    const cloudflareApiKey = String(env.DEEPSEEK_API_KEY || "").trim() || await readStoredDeepSeekKey(env);
+    const apiKey = String(body.apiKey || cloudflareApiKey || "").trim();
     const model = String(body.model || "deepseek-v4-flash").trim();
     const instruction = String(body.instruction || "").trim();
     const text = String(body.text || "");
@@ -70,4 +71,9 @@ export async function onRequestPost({ request, env }) {
   } catch (error) {
     return json({ error: error.message || "Server error" }, 500);
   }
+}
+
+async function readStoredDeepSeekKey(env) {
+  if (!env.PHONE_AUTH_KV) return "";
+  return String(await env.PHONE_AUTH_KV.get("app:deepseek_api_key") || "").trim();
 }
