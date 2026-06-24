@@ -97,7 +97,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=48").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=49").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
@@ -832,8 +832,11 @@ async function loadWordDocument() {
     paragraphs.forEach((paragraph, paragraphIndex) => {
       if (hasWordField(paragraph)) return;
       const textNodes = [...paragraph.getElementsByTagNameNS(WORD_NS, "t")];
-      const original = textNodes.map((node) => node.textContent || "").join("").trim();
+      const rawOriginal = textNodes.map((node) => node.textContent || "").join("");
+      const original = rawOriginal.trim();
       if (!original) return;
+      const leadingWhitespace = rawOriginal.match(/^\s*/)?.[0] || "";
+      const trailingWhitespace = rawOriginal.match(/\s*$/)?.[0] || "";
 
       state.segments.push({
         id: `${path}-${paragraphIndex}`,
@@ -843,6 +846,8 @@ async function loadWordDocument() {
         path,
         paragraphIndex,
         textNodeCount: textNodes.length,
+        wordLeadingWhitespace: leadingWhitespace,
+        wordTrailingWhitespace: trailingWhitespace,
         overrides: createSegmentOverrides(),
         original,
         translation: "",
@@ -1441,9 +1446,40 @@ function writeWordSegments(doc, segments) {
     const textNodes = [...paragraph.getElementsByTagNameNS(WORD_NS, "t")];
     if (!textNodes.length) return;
 
-    textNodes[0].textContent = segment.translation.trim();
-    clearRemainingTextNodes(textNodes);
+    writeWordTextNodes(textNodes, segment);
   });
+}
+
+function writeWordTextNodes(textNodes, segment) {
+  const translation = segment.translation.trim();
+  const text = `${segment.wordLeadingWhitespace || ""}${translation}${segment.wordTrailingWhitespace || ""}`;
+  const characters = [...text];
+  const originalLengths = textNodes.map((node) => [...(node.textContent || "")].length);
+  const hasOriginalText = originalLengths.some((length) => length > 0);
+
+  if (!hasOriginalText) {
+    textNodes[0].textContent = text;
+    updateWordTextSpacePreserve(textNodes[0]);
+    clearRemainingTextNodes(textNodes);
+    return;
+  }
+
+  let offset = 0;
+  textNodes.forEach((node, index) => {
+    const isLast = index === textNodes.length - 1;
+    const originalLength = originalLengths[index];
+    const take = isLast ? characters.length - offset : Math.min(originalLength, characters.length - offset);
+    node.textContent = take > 0 ? characters.slice(offset, offset + take).join("") : "";
+    offset += Math.max(0, take);
+    updateWordTextSpacePreserve(node);
+  });
+}
+
+function updateWordTextSpacePreserve(textNode) {
+  const text = textNode.textContent || "";
+  if (/^\s|\s$|\s{2,}/.test(text)) {
+    textNode.setAttribute("xml:space", "preserve");
+  }
 }
 
 function hasWordField(paragraph) {
@@ -2290,6 +2326,8 @@ async function saveCurrentDraft() {
         path: segment.path,
         paragraphIndex: segment.paragraphIndex,
         original: segment.original,
+        wordLeadingWhitespace: segment.wordLeadingWhitespace || "",
+        wordTrailingWhitespace: segment.wordTrailingWhitespace || "",
         translation: segment.translation || "",
         overrides: sanitizeSegmentOverrides(segment.overrides),
       })),
