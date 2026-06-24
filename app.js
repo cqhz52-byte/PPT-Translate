@@ -24,7 +24,9 @@ const state = {
   updatePromptShown: false,
   updateCheckRunning: false,
   pullStartY: 0,
+  pullDistance: 0,
   pullCheckReady: false,
+  pullIndicator: null,
 };
 
 const els = {
@@ -81,7 +83,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v52";
+const APP_VERSION = "v53";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -107,7 +109,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=52").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=53").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -143,6 +145,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("pagehide", flushCurrentDraftSave);
 
 function initUpdateChecks() {
+  createPullUpdateIndicator();
   window.setTimeout(() => checkForAppUpdate(), 2500);
   window.setInterval(() => {
     if (document.visibilityState === "visible") checkForAppUpdate();
@@ -151,12 +154,15 @@ function initUpdateChecks() {
   window.addEventListener("touchstart", (event) => {
     if (window.scrollY > 0 || document.body.classList.contains("is-busy")) return;
     state.pullStartY = event.touches[0]?.clientY || 0;
+    state.pullDistance = 0;
     state.pullCheckReady = false;
   }, { passive: true });
 
   window.addEventListener("touchmove", (event) => {
     if (!state.pullStartY || window.scrollY > 0 || document.body.classList.contains("is-busy")) return;
     const delta = (event.touches[0]?.clientY || 0) - state.pullStartY;
+    state.pullDistance = Math.max(0, delta);
+    updatePullUpdateIndicator(state.pullDistance);
     if (delta > PULL_UPDATE_THRESHOLD && !state.pullCheckReady) {
       state.pullCheckReady = true;
       setStatus("松手检查是否有新版本...");
@@ -166,15 +172,70 @@ function initUpdateChecks() {
   window.addEventListener("touchend", () => {
     const shouldCheck = state.pullCheckReady;
     state.pullStartY = 0;
+    state.pullDistance = 0;
     state.pullCheckReady = false;
     if (shouldCheck) {
+      updatePullUpdateIndicator(PULL_UPDATE_THRESHOLD, "checking");
       checkForAppUpdate({ manual: true });
+    } else {
+      hidePullUpdateIndicator();
     }
+  }, { passive: true });
+
+  window.addEventListener("touchcancel", () => {
+    state.pullStartY = 0;
+    state.pullDistance = 0;
+    state.pullCheckReady = false;
+    hidePullUpdateIndicator();
   }, { passive: true });
 }
 
+function createPullUpdateIndicator() {
+  if (state.pullIndicator) return state.pullIndicator;
+  const indicator = document.createElement("div");
+  indicator.className = "pull-update-indicator";
+  indicator.setAttribute("aria-live", "polite");
+  indicator.innerHTML = `
+    <span class="pull-update-spinner" aria-hidden="true"></span>
+    <span class="pull-update-text">下拉检查更新</span>
+  `;
+  document.body.append(indicator);
+  state.pullIndicator = indicator;
+  return indicator;
+}
+
+function updatePullUpdateIndicator(distance, mode = "") {
+  const indicator = state.pullIndicator || createPullUpdateIndicator();
+  const progress = Math.max(0, Math.min(1, distance / PULL_UPDATE_THRESHOLD));
+  const ready = mode === "checking" || progress >= 1;
+  const translate = Math.round(-58 + progress * 76);
+  indicator.classList.add("visible");
+  indicator.classList.toggle("ready", ready && mode !== "checking");
+  indicator.classList.toggle("checking", mode === "checking");
+  indicator.style.setProperty("--pull-progress", progress.toFixed(2));
+  indicator.style.transform = `translate(-50%, ${translate}px)`;
+  const text = indicator.querySelector(".pull-update-text");
+  if (text) {
+    text.textContent = mode === "checking"
+      ? "正在检查更新..."
+      : ready
+        ? "松手检查更新"
+        : "继续下拉检查更新";
+  }
+}
+
+function hidePullUpdateIndicator() {
+  const indicator = state.pullIndicator;
+  if (!indicator) return;
+  indicator.classList.remove("visible", "ready", "checking");
+  indicator.style.transform = "";
+}
+
 async function checkForAppUpdate(options = {}) {
-  if (state.updateCheckRunning) return false;
+  if (state.updateCheckRunning) {
+    if (options.manual) window.setTimeout(hidePullUpdateIndicator, 500);
+    return false;
+  }
   state.updateCheckRunning = true;
 
   try {
@@ -205,6 +266,9 @@ async function checkForAppUpdate(options = {}) {
     return false;
   } finally {
     state.updateCheckRunning = false;
+    if (options.manual) {
+      window.setTimeout(hidePullUpdateIndicator, 500);
+    }
   }
 }
 

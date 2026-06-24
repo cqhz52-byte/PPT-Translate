@@ -103,6 +103,57 @@ button:disabled {
   font-size: 13px;
 }
 
+.pull-update-indicator {
+  position: fixed;
+  top: max(8px, env(safe-area-inset-top));
+  left: 50%;
+  z-index: 120;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(22, 90, 114, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 12px 30px rgba(20, 35, 32, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -58px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.pull-update-indicator.visible {
+  opacity: 1;
+}
+
+.pull-update-spinner {
+  width: 17px;
+  height: 17px;
+  border: 2px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  transform: rotate(calc(var(--pull-progress, 0) * 270deg));
+}
+
+.pull-update-indicator.ready .pull-update-spinner {
+  border-color: var(--accent);
+  background: radial-gradient(circle at center, var(--accent) 0 32%, transparent 34%);
+}
+
+.pull-update-indicator.checking .pull-update-spinner {
+  animation: pull-update-spin 760ms linear infinite;
+}
+
+@keyframes pull-update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 h1,
 h2 {
   margin: 0;
