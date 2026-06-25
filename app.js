@@ -85,7 +85,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v58";
+const APP_VERSION = "v59";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -111,7 +111,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=58").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=59").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -1198,6 +1198,27 @@ async function translateAll() {
         }
         shortenAttempts += 1;
       }
+      let boxFitAttempts = 0;
+      while (shouldShortenPptBoxTranslation(segment, direction) && boxFitAttempts < 2) {
+        setStatus(`正在压缩文本框译文 ${segment.locationLabel || segment.slideNumber}：${index + 1}/${untranslated.length}`);
+        const shortened = await translateText({
+          apiBase,
+          apiProxy,
+          apiKey,
+          model,
+          direction,
+          segment,
+          text: buildPptBoxFitRequest(segment, boxFitAttempts),
+          mode: boxFitAttempts === 0 ? "boxFit" : "boxFitStrict",
+          signal: abortController.signal,
+        });
+        if (shortened && isPptBoxFitTranslationBetter(segment, shortened)) {
+          segment.translation = normalizeTranslation(shortened, segment.original, segment);
+        } else {
+          break;
+        }
+        boxFitAttempts += 1;
+      }
       updateTextarea(segment);
       updateStats();
       scheduleCurrentDraftSave();
@@ -1249,7 +1270,7 @@ async function translateText({ apiBase, apiProxy, apiKey, model, direction, segm
   }
 
   const data = await response.json();
-  return normalizeTranslation(data.translation || "", text);
+  return normalizeTranslation(data.translation || "", text, segment);
 }
 
 function queueBatchFiles(files) {
@@ -1680,7 +1701,7 @@ function writePresentationSegments(doc, segments) {
     const textNodes = [...paragraph.getElementsByTagNameNS(DRAWING_NS, "t")];
     if (!textNodes.length) return;
 
-    textNodes[0].textContent = segment.translation.trim();
+    textNodes[0].textContent = cleanPptTranslationText(segment.translation, segment.original);
     normalizePresentationRunStyle(textNodes[0], segment);
     applyPresentationBounds(paragraph, segment);
     applyPresentationLayout(paragraph, segment);
@@ -2835,13 +2856,30 @@ function buildOutputName(name) {
   return name.replace(/\.(pptx|docx)$/i, "") + `-translated.${state.fileType || "pptx"}`;
 }
 
-function normalizeTranslation(translation, source) {
+function normalizeTranslation(translation, source, segment = null) {
   const clean = translation.trim();
   if (looksLikeNonTranslation(clean, source)) return "";
+  if (segment?.type === "pptx") {
+    return applyTerminologyRules(cleanPptTranslationText(clean, source), source);
+  }
   const normalized = /[\r\n]/.test(source)
     ? clean
     : clean.replace(/\s*[\r\n]+\s*/g, " ").replace(/[ \t]{2,}/g, " ");
   return applyTerminologyRules(normalized, source);
+}
+
+function cleanPptTranslationText(text, source = "") {
+  const normalizedLines = String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .filter(Boolean);
+
+  if (!normalizedLines.length) return "";
+  if (!/[\r\n]/.test(source) && normalizedLines.length <= 2) {
+    return normalizedLines.join(" ");
+  }
+  return normalizedLines.join("\n");
 }
 
 function applyTerminologyRules(text, source = "") {
@@ -2944,12 +2982,14 @@ function applyPresentationLayout(paragraph, segment) {
   } else if (layout.wrap && layout.wrap !== "none") {
     bodyProperties.setAttribute("wrap", layout.wrap);
   } else {
-    bodyProperties.removeAttribute("wrap");
+    bodyProperties.setAttribute("wrap", "square");
   }
+
+  applyPresentationLineSpacing(paragraph, segment);
 
   if (getPptLayoutMode() === "compact-fit") {
     const autoFit = document.createElementNS(DRAWING_NS, "a:normAutofit");
-    autoFit.setAttribute("fontScale", "88000");
+    autoFit.setAttribute("fontScale", String(Math.round(getPresentationLengthScale(segment) * 100000)));
     autoFit.setAttribute("lnSpcReduction", "12000");
     bodyProperties.append(autoFit);
     return;
@@ -2963,10 +3003,24 @@ function applyPresentationLayout(paragraph, segment) {
     bodyProperties.append(document.createElementNS(DRAWING_NS, "a:spAutoFit"));
   } else {
     const autoFit = document.createElementNS(DRAWING_NS, "a:normAutofit");
-    autoFit.setAttribute("fontScale", "85000");
+    autoFit.setAttribute("fontScale", String(Math.round(getPresentationLengthScale(segment) * 100000)));
     autoFit.setAttribute("lnSpcReduction", "12000");
     bodyProperties.append(autoFit);
   }
+}
+
+function applyPresentationLineSpacing(paragraph, segment) {
+  if (shouldUseSingleLine(segment)) return;
+  const paragraphProperties = ensureChild(paragraph, "pPr");
+  [...paragraphProperties.children]
+    .filter((node) => node.localName === "lnSpc" || node.localName === "spcBef" || node.localName === "spcAft")
+    .forEach((node) => node.remove());
+
+  const lineSpacing = document.createElementNS(DRAWING_NS, "a:lnSpc");
+  const percent = document.createElementNS(DRAWING_NS, "a:spcPct");
+  percent.setAttribute("val", "85000");
+  lineSpacing.append(percent);
+  paragraphProperties.append(lineSpacing);
 }
 
 function ensureChild(parent, localName) {
@@ -2974,7 +3028,7 @@ function ensureChild(parent, localName) {
   if (existing) return existing;
 
   const child = document.createElementNS(DRAWING_NS, `a:${localName}`);
-  if (localName === "rPr") {
+  if (localName === "rPr" || localName === "pPr") {
     parent.prepend(child);
   } else {
     parent.append(child);
@@ -3017,13 +3071,15 @@ function getPresentationLengthScale(segment) {
   if (segment?.type !== "pptx") return userScale;
 
   const mode = getPptLayoutMode();
+  const shapeGroup = getPptShapeGroupSegments(segment);
+  const groupedTextBox = shapeGroup.length > 1;
   const singleLine = shouldUseSingleLine(segment);
 
-  if (singleLine) {
+  if (singleLine && !groupedTextBox) {
     return userScale;
   }
 
-  const fitScale = getPptTextBoxFitScale(segment);
+  const fitScale = groupedTextBox ? getPptShapeGroupFitScale(segment, shapeGroup) : getPptTextBoxFitScale(segment);
 
   if (mode === "compact-fit") {
     return Math.min(getLengthScale(segment.original, segment.translation, segment), fitScale);
@@ -3050,7 +3106,7 @@ function getPptTextBoxFitScale(segment, options = {}) {
   const box = getPptContentBoxPt(layout);
   if (!box) return getActiveFontScale(segment);
 
-  const text = String(segment?.translation || segment?.original || "").trim();
+  const text = cleanPptTranslationText(segment?.translation || segment?.original || "", segment?.original || "");
   if (!text) return getActiveFontScale(segment);
 
   const baseFontPt = Math.max(1, Number(layout.fontSize || 1800) / 100);
@@ -3058,7 +3114,7 @@ function getPptTextBoxFitScale(segment, options = {}) {
   const maxScale = Math.min(1.15, userScale);
   const minScale = options.singleLine
     ? Math.min(0.24, userScale)
-    : Math.max(0.48, Math.min(0.72, userScale));
+    : Math.max(0.32, Math.min(0.72, userScale));
 
   if (options.singleLine) {
     const widthAtBase = Math.max(0.1, estimatePptTextWidthPt(text, baseFontPt));
@@ -3076,6 +3132,54 @@ function getPptTextBoxFitScale(segment, options = {}) {
   }
 
   return minScale;
+}
+
+function getPptShapeGroupFitScale(segment, group = getPptShapeGroupSegments(segment)) {
+  const layout = segment?.layout || {};
+  const box = getPptContentBoxPt(layout);
+  if (!box || group.length <= 1) return getPptTextBoxFitScale(segment);
+
+  const userScale = getActiveFontScale(segment);
+  const maxScale = Math.min(1.15, userScale);
+  const minScale = Math.max(0.3, Math.min(0.72, userScale));
+  const effectiveWidth = Math.max(1, box.width * 0.78);
+  const effectiveHeight = Math.max(1, box.height * 0.82);
+
+  for (let scale = maxScale; scale >= minScale; scale -= 0.02) {
+    const totalHeight = group.reduce((sum, item) => {
+      const text = cleanPptTranslationText(item.translation || item.original || "", item.original || "");
+      if (!text) return sum;
+      const fontPt = getPptSegmentFontPt(item) * scale;
+      const lines = estimatePptWrappedLineCount(text, fontPt, effectiveWidth);
+      return sum + lines * getPptLineHeightPt(item, fontPt) * 1.22;
+    }, 0);
+
+    if (totalHeight <= effectiveHeight) {
+      return Math.max(minScale, Math.min(maxScale, scale));
+    }
+  }
+
+  return minScale;
+}
+
+function getPptShapeGroupSegments(segment) {
+  if (segment?.type !== "pptx") return [];
+  const key = getPptShapeGroupKey(segment);
+  if (!key) return [segment];
+
+  return state.segments.filter((item) => item.type === "pptx" && getPptShapeGroupKey(item) === key);
+}
+
+function getPptShapeGroupKey(segment) {
+  const bounds = segment?.layout?.bounds;
+  if (!segment?.path || !bounds?.cx || !bounds?.cy) return "";
+  return [
+    segment.path,
+    Math.round(Number(bounds.x || 0)),
+    Math.round(Number(bounds.y || 0)),
+    Math.round(Number(bounds.cx || 0)),
+    Math.round(Number(bounds.cy || 0)),
+  ].join("|");
 }
 
 function shouldShortenPptSingleLineTranslation(segment, direction) {
@@ -3115,6 +3219,112 @@ function buildPptShorteningRequest(segment, attempt = 0) {
   );
 
   return lines.join("\n");
+}
+
+function shouldShortenPptBoxTranslation(segment, direction) {
+  if (direction?.targetCode !== "en" || segment?.type !== "pptx" || shouldUseSingleLine(segment)) return false;
+  const translation = cleanPptTranslationText(segment.translation || "", segment.original);
+  if (!translation || !/[A-Za-z]/.test(translation)) return false;
+
+  const box = getPptContentBoxPt(segment.layout || {});
+  if (!box) return false;
+
+  const fitScale = getPptTextBoxFitScale({ ...segment, translation });
+  const baseFontPt = getPptSegmentFontPt(segment);
+  const sourceLines = getPptSourceVisualLineCount(segment);
+  const translatedLines = estimatePptWrappedLineCount(translation, baseFontPt * Math.max(0.35, fitScale), box.width);
+  const wordBudget = getPptBoxWordBudget(segment);
+  const words = countEnglishWords(translation);
+  const isCompactLabel = isPptCompactLabelSegment(segment);
+
+  if (isCompactLabel) {
+    return fitScale < 0.82 || translatedLines > sourceLines || words > wordBudget;
+  }
+
+  return fitScale < 0.68 || translatedLines > Math.max(sourceLines + 1, Math.ceil(sourceLines * 1.25)) || words > wordBudget * 1.15;
+}
+
+function isPptBoxFitTranslationBetter(segment, candidate) {
+  const current = cleanPptTranslationText(segment.translation || "", segment.original);
+  const next = cleanPptTranslationText(candidate || "", segment.original);
+  if (!next) return false;
+  if (!current) return true;
+
+  const currentScore = getPptBoxFitScore({ ...segment, translation: current });
+  const nextScore = getPptBoxFitScore({ ...segment, translation: next });
+  return nextScore <= currentScore * 0.98 || next.length < current.length;
+}
+
+function getPptBoxFitScore(segment) {
+  const box = getPptContentBoxPt(segment.layout || {});
+  const text = cleanPptTranslationText(segment.translation || "", segment.original);
+  if (!box || !text) return 0;
+
+  const fitScale = getPptTextBoxFitScale({ ...segment, translation: text });
+  const fontPt = getPptSegmentFontPt(segment) * Math.max(0.35, fitScale);
+  const lines = estimatePptWrappedLineCount(text, fontPt, box.width);
+  const sourceLines = getPptSourceVisualLineCount(segment);
+  const overflow = Math.max(0, lines - sourceLines);
+  return (1 - fitScale) * 100 + overflow * 12 + countEnglishWords(text) * 0.35 + text.length * 0.05;
+}
+
+function buildPptBoxFitRequest(segment, attempt = 0) {
+  const sourceLines = getPptSourceVisualLineCount(segment);
+  const wordBudget = getPptBoxWordBudget(segment, attempt);
+  const compactLabel = isPptCompactLabelSegment(segment);
+  const lines = [
+    `Source Chinese text box:\n${segment.original}`,
+    `Current English:\n${cleanPptTranslationText(segment.translation, segment.original)}`,
+    `Rewrite to fit the same PowerPoint text box height. Use no more than ${sourceLines} visual lines and about ${wordBudget} English words.`,
+    compactLabel
+      ? "This is a short label inside a diagram; use a terse label phrase, not a sentence."
+      : "Use compact slide wording, short noun phrases, and accepted abbreviations.",
+    "Preserve the core meaning only; remove filler verbs, repeated subjects, and explanatory wording.",
+    "Do not add blank lines.",
+  ];
+
+  if (attempt > 0) {
+    lines.push("The previous rewrite is still too tall. Be more aggressive and keep only essential bullet phrases.");
+  }
+
+  lines.push("Return only the rewritten English text.");
+  return lines.join("\n\n");
+}
+
+function getPptSourceVisualLineCount(segment) {
+  const layout = segment?.layout || {};
+  const box = getPptContentBoxPt(layout);
+  const original = String(segment?.original || "").trim();
+  const manualLines = original.split(/\r\n|\r|\n/).filter((line) => line.trim()).length || 1;
+  if (!box) return manualLines;
+
+  const fontPt = getPptSegmentFontPt(segment);
+  const wrappedLines = estimatePptWrappedLineCount(original, fontPt, box.width);
+  return Math.max(1, manualLines, wrappedLines);
+}
+
+function getPptBoxWordBudget(segment, attempt = 0) {
+  const originalChars = [...String(segment?.original || "").replace(/\s+/g, "")].length;
+  const sourceLines = getPptSourceVisualLineCount(segment);
+  const labelLimit = isPptCompactLabelSegment(segment)
+    ? Math.max(2, Math.min(10, sourceLines * 2 + 1))
+    : Infinity;
+  const base = Math.min(labelLimit, Math.max(sourceLines * 2, Math.ceil(originalChars * 0.72)));
+  const strict = attempt > 0 ? Math.floor(base * 0.72) : base;
+  return Math.max(4, Math.min(42, strict));
+}
+
+function isPptCompactLabelSegment(segment) {
+  if (segment?.type !== "pptx") return false;
+  const text = String(segment.original || "").replace(/\s+/g, "");
+  if (!text) return false;
+
+  const sourceLines = getPptSourceVisualLineCount(segment);
+  const box = getPptContentBoxPt(segment.layout || {});
+  const fontPt = getPptSegmentFontPt(segment);
+  const shortText = [...text].length <= 24 && sourceLines <= 4;
+  const shallowBox = box ? box.height <= getPptLineHeightPt(segment, fontPt) * Math.max(1.8, sourceLines + 0.65) : false;
+  return shortText && (shallowBox || sourceLines <= 2);
 }
 
 function getPptSegmentFontPt(segment) {
@@ -3274,6 +3484,7 @@ function shouldUseSingleLine(segment) {
   if (segment?.overrides?.wrapMode === "single") return true;
   if (segment?.overrides?.wrapMode === "wrap") return false;
   if (segment?.overrides?.singleLine) return true;
+  if (getPptShapeGroupSegments(segment).length > 1) return false;
   const mode = getPptLayoutMode();
   if (mode === "compact-fit") return false;
   if (mode === "keep-size") return true;
@@ -3624,7 +3835,8 @@ function getPreviewAutofitScale(segment) {
 
 function getPresentationExportFontSize(segment) {
   const baseSize = Number(segment.layout?.fontSize || 1800);
-  return Math.max(700, Math.round(baseSize * getPresentationLengthScale(segment)));
+  const minimum = segment?.type === "pptx" && !shouldUseSingleLine(segment) ? 450 : 700;
+  return Math.max(minimum, Math.round(baseSize * getPresentationLengthScale(segment)));
 }
 
 function getPreviewScaleLabel(segment) {
@@ -3762,6 +3974,22 @@ function buildSegmentTranslationInstruction(direction, segment, mode = "translat
       return [direction.instruction, ...extras].filter(Boolean).join(" ");
     }
 
+    if (mode === "boxFit" || mode === "boxFitStrict") {
+      const sourceLines = getPptSourceVisualLineCount(segment);
+      const wordBudget = getPptBoxWordBudget(segment, mode === "boxFitStrict" ? 1 : 0);
+      const compactLabel = isPptCompactLabelSegment(segment);
+      extras.push([
+        "Rewrite the provided current English only to fit the original PowerPoint text box height.",
+        `Use no more than ${sourceLines} visual lines and about ${wordBudget} English words.`,
+        compactLabel ? "This is a short diagram label; use a terse label phrase, not a sentence." : "Use short slide bullet phrases, not explanatory sentences.",
+        "Remove filler, repeated subjects, and nonessential adjectives.",
+        "Do not add blank lines.",
+        mode === "boxFitStrict" ? "Be aggressive: preserve only the essential meaning." : "",
+        "Return only the rewritten English text.",
+      ].filter(Boolean).join(" "));
+      return [direction.instruction, ...extras].filter(Boolean).join(" ");
+    }
+
     if (isSingleLine) {
       extras.push(targetIsEnglish
         ? [
@@ -3778,14 +4006,22 @@ function buildSegmentTranslationInstruction(direction, segment, mode = "translat
             "Do not expand it into a sentence.",
           ].join(" "));
     } else {
+      const compactLabel = isPptCompactLabelSegment(segment);
       extras.push(targetIsEnglish
-        ? [
+        ? (compactLabel ? [
+            "This source is a compact PowerPoint diagram label, even if it visually wraps across two lines.",
+            `Keep it within ${getPptSourceVisualLineCount(segment)} visual lines and about ${getPptBoxWordBudget(segment)} words.`,
+            "Use a terse label phrase, not a sentence.",
+            "Do not add blank lines.",
+          ].join(" ") : [
             "This source is a multi-line PowerPoint text box.",
             "Keep the translation compact enough to fit the original text box.",
+            `Keep close to the original visual height, ideally within ${getPptSourceVisualLineCount(segment)} lines.`,
             "Use compact bullet-style wording or concise sentence fragments where natural.",
             "Avoid explanatory expansion, long relative clauses, and repeated subjects.",
-          ].join(" ")
-        : "This source is a multi-line PowerPoint text box; keep the translation compact enough to fit the original text box.");
+            "Do not add blank lines.",
+          ].join(" "))
+        : "This source is a multi-line PowerPoint text box; keep the translation compact enough to fit the original text box and do not add blank lines.");
     }
   }
 
