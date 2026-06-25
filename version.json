@@ -1,4 +1,4 @@
 {
-  "version": "v54",
-  "message": "发现新版本 v54：电脑端可留空 API Key，直接使用 Cloudflare 后端保存的 Key。"
+  "version": "v55",
+  "message": "发现新版本 v55：PPT 版式预览/调整入口恢复到文本清单顶部，字号调整更稳定。"
 }

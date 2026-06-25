@@ -37,6 +37,7 @@ const els = {
   translateButton: document.querySelector("#translateButton"),
   batchTranslateButton: document.querySelector("#batchTranslateButton"),
   previewButton: document.querySelector("#previewButton"),
+  layoutPreviewButton: document.querySelector("#layoutPreviewButton"),
   downloadButton: document.querySelector("#downloadButton"),
   shareButton: document.querySelector("#shareButton"),
   resetButton: document.querySelector("#resetButton"),
@@ -83,7 +84,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v54";
+const APP_VERSION = "v55";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -109,7 +110,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=54").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=55").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -413,6 +414,7 @@ setMobileView(state.mobileView);
 els.translateButton.addEventListener("click", handleTranslateButtonClick);
 els.batchTranslateButton?.addEventListener("click", processBatchQueue);
 els.previewButton.addEventListener("click", openPreview);
+els.layoutPreviewButton?.addEventListener("click", openPreview);
 els.downloadButton.addEventListener("click", downloadPresentation);
 els.shareButton.addEventListener("click", sharePresentation);
 els.resetButton.addEventListener("click", handleResetButtonClick);
@@ -1828,6 +1830,9 @@ function updateStats() {
   els.translatedCount.textContent = String(translated);
   updateTranslateButtonState(document.body.classList.contains("is-busy") || state.batchRunning);
   els.previewButton.disabled = !state.segments.length;
+  if (els.layoutPreviewButton) {
+    els.layoutPreviewButton.disabled = !state.segments.length;
+  }
   els.downloadButton.disabled = !state.segments.length;
   els.shareButton.disabled = !state.segments.length;
   updateBatchButton();
@@ -1861,6 +1866,9 @@ function setBusy(isBusy, message = "") {
   const effectiveBusy = isBusy || state.batchRunning;
   updateTranslateButtonState(effectiveBusy);
   els.previewButton.disabled = effectiveBusy || !state.segments.length;
+  if (els.layoutPreviewButton) {
+    els.layoutPreviewButton.disabled = effectiveBusy || !state.segments.length;
+  }
   els.downloadButton.disabled = effectiveBusy || !state.segments.length;
   els.shareButton.disabled = effectiveBusy || !state.segments.length;
   if (els.batchTranslateButton) {
@@ -2425,8 +2433,15 @@ function createPreviewBoxTools(segment, index) {
     const current = state.segments[index];
     current.overrides.fontScale = scaleInput.value;
     scaleValue.textContent = getPreviewScaleLabel(current);
-    rerenderPreviewIfOpen();
+    const box = tools.closest(".slide-text-box");
+    if (box) {
+      box.style.fontSize = `${getPreviewFontCqw(current)}cqw`;
+    }
     scheduleCurrentDraftSave();
+  });
+
+  scaleInput.addEventListener("change", () => {
+    renderSegments();
   });
 
   const wrapButton = document.createElement("button");
@@ -3338,6 +3353,16 @@ function applyPreviewTextStyle(box, segment) {
 
 function emuToPreviewCqw(value) {
   return (Number(value || 0) / state.slideSize.cx) * 100;
+}
+
+function toSlidePercentX(value) {
+  const width = Number(state.slideSize?.cx || 0) || 1;
+  return Math.max(0, (Number(value || 0) / width) * 100);
+}
+
+function toSlidePercentY(value) {
+  const height = Number(state.slideSize?.cy || 0) || 1;
+  return Math.max(0, (Number(value || 0) / height) * 100);
 }
 
 function getNumericAttribute(node, name, fallback) {
