@@ -85,7 +85,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v56";
+const APP_VERSION = "v57";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -111,7 +111,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=56").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=57").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -1173,6 +1173,7 @@ async function translateAll() {
         apiKey,
         model,
         direction,
+        segment,
         text: segment.original,
         signal: abortController.signal,
       });
@@ -1205,7 +1206,7 @@ async function translateAll() {
   }
 }
 
-async function translateText({ apiBase, apiProxy, apiKey, model, direction, text, signal }) {
+async function translateText({ apiBase, apiProxy, apiKey, model, direction, segment = null, text, signal }) {
   const response = await fetch(apiProxy, {
     method: "POST",
     headers: {
@@ -1216,7 +1217,7 @@ async function translateText({ apiBase, apiProxy, apiKey, model, direction, text
       apiBase,
       apiKey,
       model,
-      instruction: direction.instruction,
+      instruction: buildSegmentTranslationInstruction(direction, segment),
       text,
     }),
   });
@@ -2906,10 +2907,7 @@ function applyPresentationLayout(paragraph, segment) {
 
   if (shouldForceSingleLine) {
     bodyProperties.setAttribute("wrap", "none");
-    const autoFit = document.createElementNS(DRAWING_NS, "a:normAutofit");
-    autoFit.setAttribute("fontScale", "85000");
-    autoFit.setAttribute("lnSpcReduction", "12000");
-    bodyProperties.append(autoFit);
+    bodyProperties.append(document.createElementNS(DRAWING_NS, "a:noAutofit"));
     return;
   } else if (layout.wrap && layout.wrap !== "none") {
     bodyProperties.setAttribute("wrap", layout.wrap);
@@ -2988,9 +2986,14 @@ function getPresentationLengthScale(segment) {
 
   const mode = getPptLayoutMode();
   const singleLine = shouldUseSingleLine(segment);
-  const fitScale = getPptTextBoxFitScale(segment, { singleLine });
 
-  if (mode === "compact-fit" || singleLine) {
+  if (singleLine) {
+    return userScale;
+  }
+
+  const fitScale = getPptTextBoxFitScale(segment);
+
+  if (mode === "compact-fit") {
     return Math.min(getLengthScale(segment.original, segment.translation, segment), fitScale);
   }
 
@@ -3527,7 +3530,7 @@ function getPreviewFontCqw(segment) {
 }
 
 function getPreviewAutofitScale(segment) {
-  if (shouldUseSingleLine(segment)) return 0.85;
+  if (shouldUseSingleLine(segment)) return 1;
   if (getPptLayoutMode() === "compact-fit") return 0.88;
 
   const layout = segment.layout || {};
@@ -3649,4 +3652,52 @@ function getDirectionConfig(value) {
       "Always translate the company name 伽奈维 as CuraWay exactly; never use Ganavi, Ganawei, Jianaiwei, or Curaway.",
     ].join(" "),
   };
+}
+
+function buildSegmentTranslationInstruction(direction, segment) {
+  const extras = [];
+
+  if (segment?.type === "pptx") {
+    const targetIsEnglish = direction.targetCode === "en";
+    const isSingleLine = shouldUseSingleLine(segment);
+    const budget = getPptTranslationLengthBudget(segment);
+
+    if (isSingleLine) {
+      extras.push(targetIsEnglish
+        ? [
+            "This source is a single-line PowerPoint text box, likely a title or label.",
+            "Return one concise single-line English phrase.",
+            `Aim to stay within ${budget.words} words and about ${budget.characters} characters if possible.`,
+            "Prefer terse heading wording, noun phrases, and standard abbreviations; omit unnecessary articles and filler words.",
+            "Do not expand it into a sentence.",
+          ].join(" ")
+        : [
+            "This source is a single-line PowerPoint text box, likely a title or label.",
+            "Return one concise single-line translation with similar visual length.",
+            "Do not expand it into a sentence.",
+          ].join(" "));
+    } else {
+      extras.push(targetIsEnglish
+        ? [
+            "This source is a multi-line PowerPoint text box.",
+            "Keep the translation compact enough to fit the original text box.",
+            "Use concise sentence fragments where natural and avoid explanatory expansion.",
+          ].join(" ")
+        : "This source is a multi-line PowerPoint text box; keep the translation compact enough to fit the original text box.");
+    }
+  }
+
+  return [direction.instruction, ...extras].filter(Boolean).join(" ");
+}
+
+function getPptTranslationLengthBudget(segment) {
+  const originalLength = Math.max(1, [...String(segment?.original || "").trim()].length);
+  const layout = segment?.layout || {};
+  const box = getPptContentBoxPt(layout);
+  const fontPt = Math.max(1, Number(layout.fontSize || 1800) / 100);
+  const visualCharacters = box ? Math.floor((box.width / Math.max(1, fontPt)) / 0.52) : originalLength * 2;
+  const characters = Math.max(12, Math.min(72, Math.round(Math.max(originalLength * 1.6, visualCharacters))));
+  const words = Math.max(2, Math.min(12, Math.round(characters / 6)));
+
+  return { characters, words };
 }
