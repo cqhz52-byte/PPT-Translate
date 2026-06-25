@@ -76,6 +76,7 @@ const slidePathPattern = /^ppt\/slides\/slide(\d+)\.xml$/;
 const wordPathPattern = /^word\/(?:document|header\d+|footnotes|endnotes|comments)\.xml$/;
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const PPT_EMU_PER_PT = 12700;
 const SETTINGS_KEY = "deepseek-document-translator-settings-v1";
 const SETTINGS_VERSION = 5;
 const SAVED_FILES_DB = "curaway-translated-files-v1";
@@ -84,7 +85,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v55";
+const APP_VERSION = "v56";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -110,7 +111,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=55").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=56").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -2982,11 +2983,18 @@ function getLengthScale(source, translation, segment) {
 }
 
 function getPresentationLengthScale(segment) {
-  if (getPptLayoutMode() === "compact-fit" || shouldUseSingleLine(segment)) {
-    return getLengthScale(segment.original, segment.translation, segment);
+  const userScale = getActiveFontScale(segment);
+  if (segment?.type !== "pptx") return userScale;
+
+  const mode = getPptLayoutMode();
+  const singleLine = shouldUseSingleLine(segment);
+  const fitScale = getPptTextBoxFitScale(segment, { singleLine });
+
+  if (mode === "compact-fit" || singleLine) {
+    return Math.min(getLengthScale(segment.original, segment.translation, segment), fitScale);
   }
 
-  return getActiveFontScale(segment);
+  return Math.min(userScale, fitScale);
 }
 
 function getPptLayoutMode() {
@@ -3000,6 +3008,117 @@ function getActiveFontScale(segment) {
   }
 
   return getUserFontScale();
+}
+
+function getPptTextBoxFitScale(segment, options = {}) {
+  const layout = segment?.layout || {};
+  const box = getPptContentBoxPt(layout);
+  if (!box) return getActiveFontScale(segment);
+
+  const text = String(segment?.translation || segment?.original || "").trim();
+  if (!text) return getActiveFontScale(segment);
+
+  const baseFontPt = Math.max(1, Number(layout.fontSize || 1800) / 100);
+  const userScale = getActiveFontScale(segment);
+  const maxScale = Math.min(1.15, userScale);
+  const minScale = options.singleLine
+    ? Math.min(0.24, userScale)
+    : Math.max(0.48, Math.min(0.72, userScale));
+
+  if (options.singleLine) {
+    const widthAtBase = Math.max(0.1, estimatePptTextWidthPt(text, baseFontPt));
+    const fitScale = (box.width * 0.98) / widthAtBase;
+    return Math.max(minScale, Math.min(maxScale, fitScale));
+  }
+
+  for (let scale = maxScale; scale >= minScale; scale -= 0.02) {
+    const fontPt = baseFontPt * scale;
+    const lines = estimatePptWrappedLineCount(text, fontPt, box.width);
+    const lineHeight = getPptLineHeightPt(segment, fontPt);
+    if (lines * lineHeight <= box.height * 0.98) {
+      return Math.max(minScale, Math.min(maxScale, scale));
+    }
+  }
+
+  return minScale;
+}
+
+function getPptContentBoxPt(layout) {
+  const bounds = layout?.bounds;
+  if (!bounds?.cx || !bounds?.cy) return null;
+
+  const insets = layout.insets || {};
+  const widthEmu = Math.max(1, Number(bounds.cx || 0) - Number(insets.left || 0) - Number(insets.right || 0));
+  const heightEmu = Math.max(1, Number(bounds.cy || 0) - Number(insets.top || 0) - Number(insets.bottom || 0));
+
+  return {
+    width: widthEmu / PPT_EMU_PER_PT,
+    height: heightEmu / PPT_EMU_PER_PT,
+  };
+}
+
+function getPptLineHeightPt(segment, fontPt) {
+  const factor = Number(segment?.layout?.paragraphStyle?.lineHeight || 1);
+  return fontPt * Math.max(1.05, Math.min(2.2, factor || 1.12));
+}
+
+function estimatePptWrappedLineCount(text, fontPt, maxWidthPt) {
+  if (!maxWidthPt || maxWidthPt <= 0) return 1;
+
+  return String(text || "")
+    .split(/\r\n|\r|\n/)
+    .reduce((total, paragraph) => total + estimatePptParagraphLineCount(paragraph, fontPt, maxWidthPt), 0);
+}
+
+function estimatePptParagraphLineCount(paragraph, fontPt, maxWidthPt) {
+  const clean = String(paragraph || "").trim();
+  if (!clean) return 1;
+
+  const tokens = /[\u3400-\u9fff]/.test(clean)
+    ? [...clean]
+    : clean.split(/(\s+)/).filter(Boolean);
+  let lines = 1;
+  let currentWidth = 0;
+
+  tokens.forEach((token) => {
+    const width = estimatePptTextWidthPt(token, fontPt);
+    if (currentWidth > 0 && currentWidth + width > maxWidthPt) {
+      lines += 1;
+      currentWidth = 0;
+    }
+
+    if (width > maxWidthPt) {
+      const charWidths = [...token].map((char) => estimatePptTextWidthPt(char, fontPt));
+      charWidths.forEach((charWidth) => {
+        if (currentWidth > 0 && currentWidth + charWidth > maxWidthPt) {
+          lines += 1;
+          currentWidth = 0;
+        }
+        currentWidth += charWidth;
+      });
+      return;
+    }
+
+    currentWidth += width;
+  });
+
+  return lines;
+}
+
+function estimatePptTextWidthPt(text, fontPt) {
+  const em = [...String(text || "")].reduce((sum, char) => sum + getPptCharWidthEm(char), 0);
+  return em * Math.max(1, fontPt);
+}
+
+function getPptCharWidthEm(char) {
+  if (/[\u3400-\u9fff]/.test(char)) return 1;
+  if (/\s/.test(char)) return 0.32;
+  if (/[ilI.,;:|!]/.test(char)) return 0.28;
+  if (/[fjrt()[\]{}'"]/i.test(char)) return 0.38;
+  if (/[A-ZMW@#%&]/.test(char)) return 0.68;
+  if (/[0-9]/.test(char)) return 0.54;
+  if (/[-_/\\]/.test(char)) return 0.36;
+  return 0.52;
 }
 
 async function readSlideSize() {
@@ -3076,7 +3195,28 @@ function shouldUseSingleLine(segment) {
   const mode = getPptLayoutMode();
   if (mode === "compact-fit") return false;
   if (mode === "keep-size") return true;
-  return false;
+  return isSourceSingleLinePptSegment(segment);
+}
+
+function isSourceSingleLinePptSegment(segment) {
+  if (segment?.type !== "pptx") return false;
+  const layout = segment.layout || {};
+  const original = String(segment.original || "").trim();
+  if (!original || /[\r\n]/.test(original)) return false;
+  if (layout.hasManualBreaks || Number(layout.textBodyParagraphCount || 1) > 1) return false;
+
+  const box = getPptContentBoxPt(layout);
+  const baseFontPt = Math.max(1, Number(layout.fontSize || 1800) / 100);
+  if (!box) return [...original].length <= 18;
+
+  const sourceWidth = estimatePptTextWidthPt(original, baseFontPt);
+  if (sourceWidth <= box.width * 1.08) return true;
+
+  const sourceLines = estimatePptWrappedLineCount(original, baseFontPt, box.width);
+  if (sourceLines <= 1) return true;
+
+  const sourceLineHeight = getPptLineHeightPt(segment, baseFontPt);
+  return box.height <= sourceLineHeight * 1.45 && [...original].length <= 28;
 }
 
 function createSegmentControls(segment, index) {
@@ -3115,12 +3255,12 @@ function createSegmentControls(segment, index) {
 
   const singleLineInput = document.createElement("input");
   singleLineInput.type = "checkbox";
-  singleLineInput.checked = segment.overrides.wrapMode === "single" || Boolean(segment.overrides.singleLine);
+  singleLineInput.checked = shouldUseSingleLine(segment);
   singleLineInput.dataset.index = String(index);
   singleLineInput.addEventListener("change", () => {
     const current = state.segments[Number(singleLineInput.dataset.index)];
     current.overrides.singleLine = singleLineInput.checked;
-    current.overrides.wrapMode = singleLineInput.checked ? "single" : "";
+    current.overrides.wrapMode = singleLineInput.checked ? "single" : "wrap";
     rerenderPreviewIfOpen();
     scheduleCurrentDraftSave();
   });
