@@ -85,7 +85,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v59";
+const APP_VERSION = "v60";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -111,7 +111,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=59").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=60").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -1701,6 +1701,12 @@ function writePresentationSegments(doc, segments) {
     const textNodes = [...paragraph.getElementsByTagNameNS(DRAWING_NS, "t")];
     if (!textNodes.length) return;
 
+    if (shouldSuppressZeroBoundsPresentationText(segment, paragraph)) {
+      textNodes[0].textContent = "";
+      clearRemainingTextNodes(textNodes);
+      return;
+    }
+
     textNodes[0].textContent = cleanPptTranslationText(segment.translation, segment.original);
     normalizePresentationRunStyle(textNodes[0], segment);
     applyPresentationBounds(paragraph, segment);
@@ -2948,6 +2954,28 @@ function normalizePresentationRunStyle(textNode, segment) {
   [...runProperties.getElementsByTagNameNS(DRAWING_NS, "sym")].forEach((node) => node.remove());
 }
 
+function shouldSuppressZeroBoundsPresentationText(segment, paragraph = null) {
+  if (segment?.type !== "pptx") return false;
+  const bounds = paragraph ? getOwnShapeBounds(paragraph) : segment.layout?.bounds;
+  return Number(bounds?.cx || 0) <= 1 || Number(bounds?.cy || 0) <= 1;
+}
+
+function getOwnShapeBounds(paragraph) {
+  const shape = paragraph?.parentElement?.parentElement;
+  const shapeProperties = [...(shape?.children || [])].find((node) => node.localName === "spPr");
+  const transform = [...(shapeProperties?.children || [])].find((node) => node.localName === "xfrm");
+  const offset = [...(transform?.children || [])].find((node) => node.localName === "off");
+  const extent = [...(transform?.children || [])].find((node) => node.localName === "ext");
+  if (!offset || !extent) return null;
+
+  return {
+    x: Number(offset.getAttribute("x")) || 0,
+    y: Number(offset.getAttribute("y")) || 0,
+    cx: Number(extent.getAttribute("cx")) || 0,
+    cy: Number(extent.getAttribute("cy")) || 0,
+  };
+}
+
 function applyPresentationBounds(paragraph, segment) {
   const bounds = segment.overrides?.bounds;
   if (!bounds) return;
@@ -3075,11 +3103,13 @@ function getPresentationLengthScale(segment) {
   const groupedTextBox = shapeGroup.length > 1;
   const singleLine = shouldUseSingleLine(segment);
 
-  if (singleLine && !groupedTextBox) {
+  if (singleLine && !groupedTextBox && !isPptOversizedSingleLineSegment(segment)) {
     return userScale;
   }
 
-  const fitScale = groupedTextBox ? getPptShapeGroupFitScale(segment, shapeGroup) : getPptTextBoxFitScale(segment);
+  const fitScale = groupedTextBox
+    ? getPptShapeGroupFitScale(segment, shapeGroup)
+    : getPptTextBoxFitScale(segment, { singleLine });
 
   if (mode === "compact-fit") {
     return Math.min(getLengthScale(segment.original, segment.translation, segment), fitScale);
@@ -3118,7 +3148,8 @@ function getPptTextBoxFitScale(segment, options = {}) {
 
   if (options.singleLine) {
     const widthAtBase = Math.max(0.1, estimatePptTextWidthPt(text, baseFontPt));
-    const fitScale = (box.width * 0.98) / widthAtBase;
+    const lineHeightAtBase = getPptLineHeightPt(segment, baseFontPt);
+    const fitScale = Math.min((box.width * 0.98) / widthAtBase, (box.height * 0.92) / Math.max(0.1, lineHeightAtBase));
     return Math.max(minScale, Math.min(maxScale, fitScale));
   }
 
@@ -3196,6 +3227,18 @@ function shouldShortenPptSingleLineTranslation(segment, direction) {
   const words = countEnglishWords(translation);
 
   return width > box.width * 1.08 || words > budget.words + 2 || [...translation].length > budget.characters * 1.35;
+}
+
+function isPptOversizedSingleLineSegment(segment) {
+  if (segment?.type !== "pptx") return false;
+  if (!isSourceSingleLinePptSegment(segment)) return false;
+
+  const box = getPptContentBoxPt(segment.layout || {});
+  if (!box) return false;
+
+  const fontPt = getPptSegmentFontPt(segment);
+  const lineHeight = getPptLineHeightPt(segment, fontPt);
+  return fontPt >= 32 && box.height < lineHeight * 1.05;
 }
 
 function buildPptShorteningRequest(segment, attempt = 0) {
