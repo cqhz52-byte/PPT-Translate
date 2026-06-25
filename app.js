@@ -85,7 +85,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v60";
+const APP_VERSION = "v61";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -111,7 +111,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=60").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=61").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -3012,6 +3012,8 @@ function applyPresentationLayout(paragraph, segment) {
   } else {
     bodyProperties.setAttribute("wrap", "square");
   }
+  bodyProperties.setAttribute("anchor", "t");
+  bodyProperties.setAttribute("anchorCtr", "0");
 
   applyPresentationLineSpacing(paragraph, segment);
 
@@ -3046,9 +3048,17 @@ function applyPresentationLineSpacing(paragraph, segment) {
 
   const lineSpacing = document.createElementNS(DRAWING_NS, "a:lnSpc");
   const percent = document.createElementNS(DRAWING_NS, "a:spcPct");
-  percent.setAttribute("val", "85000");
+  percent.setAttribute("val", getPptShapeGroupSegments(segment).length > 1 ? "72000" : "85000");
   lineSpacing.append(percent);
-  paragraphProperties.append(lineSpacing);
+  paragraphProperties.append(lineSpacing, createZeroParagraphSpacing("spcBef"), createZeroParagraphSpacing("spcAft"));
+}
+
+function createZeroParagraphSpacing(localName) {
+  const spacing = document.createElementNS(DRAWING_NS, `a:${localName}`);
+  const points = document.createElementNS(DRAWING_NS, "a:spcPts");
+  points.setAttribute("val", "0");
+  spacing.append(points);
+  return spacing;
 }
 
 function ensureChild(parent, localName) {
