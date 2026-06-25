@@ -85,7 +85,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v57";
+const APP_VERSION = "v58";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -111,7 +111,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=57").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=58").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -1177,6 +1177,27 @@ async function translateAll() {
         text: segment.original,
         signal: abortController.signal,
       });
+      let shortenAttempts = 0;
+      while (shouldShortenPptSingleLineTranslation(segment, direction) && shortenAttempts < 2) {
+        setStatus(`正在压缩标题译文 ${segment.locationLabel || segment.slideNumber}：${index + 1}/${untranslated.length}`);
+        const shortened = await translateText({
+          apiBase,
+          apiProxy,
+          apiKey,
+          model,
+          direction,
+          segment,
+          text: buildPptShorteningRequest(segment, shortenAttempts),
+          mode: shortenAttempts === 0 ? "shorten" : "ultraShort",
+          signal: abortController.signal,
+        });
+        if (shortened && estimatePptTextWidthPt(shortened, getPptSegmentFontPt(segment)) <= estimatePptTextWidthPt(segment.translation, getPptSegmentFontPt(segment))) {
+          segment.translation = shortened;
+        } else {
+          break;
+        }
+        shortenAttempts += 1;
+      }
       updateTextarea(segment);
       updateStats();
       scheduleCurrentDraftSave();
@@ -1206,7 +1227,7 @@ async function translateAll() {
   }
 }
 
-async function translateText({ apiBase, apiProxy, apiKey, model, direction, segment = null, text, signal }) {
+async function translateText({ apiBase, apiProxy, apiKey, model, direction, segment = null, text, mode = "translate", signal }) {
   const response = await fetch(apiProxy, {
     method: "POST",
     headers: {
@@ -1217,7 +1238,7 @@ async function translateText({ apiBase, apiProxy, apiKey, model, direction, segm
       apiBase,
       apiKey,
       model,
-      instruction: buildSegmentTranslationInstruction(direction, segment),
+      instruction: buildSegmentTranslationInstruction(direction, segment, mode),
       text,
     }),
   });
@@ -2827,6 +2848,13 @@ function applyTerminologyRules(text, source = "") {
   if (!text) return text;
 
   let normalized = text
+    .replace(/\bPori\s*Nova\b/gi, "PoriNova")
+    .replace(/\bPorinova\b/g, "PoriNova")
+    .replace(/\bBao\s*Rui\s*(?:Dao|Knife|Blade)\b/gi, "PoriNova")
+    .replace(/\bBaorui\s*(?:Dao|Knife|Blade)\b/gi, "PoriNova")
+    .replace(/\bsteep\s*pulse\b/gi, "steep-pulse")
+    .replace(/\bhigh frequency bipolar\b/gi, "high-frequency bipolar")
+    .replace(/\bradio frequency\b/gi, "radiofrequency")
     .replace(/\bCura\s*way\b/gi, "CuraWay")
     .replace(/\bCuraway\b/g, "CuraWay")
     .replace(/\bCURAWAY\b/g, "CuraWay")
@@ -2840,6 +2868,10 @@ function applyTerminologyRules(text, source = "") {
     normalized = normalized
       .replace(/\bZhejiang\s+(?:CuraWay|Ganavi|Ganawei|Ganaiwei|Jianaiwei|Jia\s*Nai\s*Wei)\s+Medical\s+Technology\s+Co\.?,?\s*Ltd\.?/gi, "Zhejiang CuraWay Medical Technology Co., Ltd.")
       .replace(/\b(?:Ganavi|Ganawei|Ganaiwei|Jianaiwei|Jia\s*Nai\s*Wei)\s+Medical\s+Technology\s+Co\.?,?\s*Ltd\.?/gi, "CuraWay Medical Technology Co., Ltd.");
+  }
+
+  if (/宝瑞刀|PoriNova/i.test(source)) {
+    normalized = normalized.replace(/\bPoriNova(?:\s*(?:Knife|Blade|Device|System))?\b/gi, "PoriNova");
   }
 
   return normalized;
@@ -3044,6 +3076,53 @@ function getPptTextBoxFitScale(segment, options = {}) {
   }
 
   return minScale;
+}
+
+function shouldShortenPptSingleLineTranslation(segment, direction) {
+  if (direction?.targetCode !== "en" || segment?.type !== "pptx" || !shouldUseSingleLine(segment)) return false;
+  const translation = String(segment.translation || "").trim();
+  if (!translation || !/[A-Za-z]/.test(translation)) return false;
+
+  const box = getPptContentBoxPt(segment.layout || {});
+  if (!box) return false;
+
+  const fontPt = getPptSegmentFontPt(segment);
+  const width = estimatePptTextWidthPt(translation, fontPt);
+  const budget = getPptTranslationLengthBudget(segment);
+  const words = countEnglishWords(translation);
+
+  return width > box.width * 1.08 || words > budget.words + 2 || [...translation].length > budget.characters * 1.35;
+}
+
+function buildPptShorteningRequest(segment, attempt = 0) {
+  const budget = getPptTranslationLengthBudget(segment);
+  const strictLimit = {
+    words: Math.max(2, Math.min(budget.words, attempt > 0 ? 3 : budget.words)),
+    characters: Math.max(8, Math.min(budget.characters, attempt > 0 ? Math.round(budget.characters * 0.72) : budget.characters)),
+  };
+  const lines = [
+    `Source Chinese: ${segment.original}`,
+    `Current English: ${segment.translation}`,
+    `Rewrite as a shorter PowerPoint title/label, ideally within ${strictLimit.words} words and about ${strictLimit.characters} characters.`,
+  ];
+
+  if (attempt > 0) {
+    lines.push("The previous rewrite is still too long for the text box. Be more aggressive: keep only the core meaning, drop the brand or generic words if needed, and use accepted abbreviations.");
+  }
+
+  lines.push(
+    "Return only the shorter English text.",
+  );
+
+  return lines.join("\n");
+}
+
+function getPptSegmentFontPt(segment) {
+  return Math.max(1, Number(segment?.layout?.fontSize || 1800) / 100);
+}
+
+function countEnglishWords(text) {
+  return (String(text || "").match(/[A-Za-z0-9]+(?:[-/][A-Za-z0-9]+)*/g) || []).length;
 }
 
 function getPptContentBoxPt(layout) {
@@ -3654,25 +3733,47 @@ function getDirectionConfig(value) {
   };
 }
 
-function buildSegmentTranslationInstruction(direction, segment) {
+function buildSegmentTranslationInstruction(direction, segment, mode = "translate") {
   const extras = [];
 
   if (segment?.type === "pptx") {
     const targetIsEnglish = direction.targetCode === "en";
     const isSingleLine = shouldUseSingleLine(segment);
     const budget = getPptTranslationLengthBudget(segment);
+    const role = getPptSegmentRole(segment);
+
+    extras.push([
+      "Use this fixed terminology when applicable:",
+      "宝瑞刀/PoriNova = PoriNova; 陡脉冲治疗系统 = Steep-Pulse Therapy System; 不可逆电穿孔 = irreversible electroporation (IRE); 射频 = radiofrequency (RF); 针道止血 = tract hemostasis; 种植转移 = tract seeding; 高频双极性 = high-frequency bipolar; 局麻 = local anesthesia; 肌松 = muscle relaxation.",
+      "Keep FDA, MDR, NMPA, CE, ANVISA, MDA, HSA, IRE, RFA, FSA, and PPS unchanged.",
+    ].join(" "));
+
+    if (mode === "shorten" || mode === "ultraShort") {
+      extras.push([
+        "Rewrite the provided current English only.",
+        mode === "ultraShort"
+          ? "Make it extremely short for a narrow PowerPoint single-line title or label."
+          : "Make it shorter for a PowerPoint single-line title or label.",
+        `Target: no more than ${budget.words} words and about ${budget.characters} characters if possible.`,
+        "Prefer accepted abbreviations, compact noun phrases, ampersands, and slash forms.",
+        mode === "ultraShort" ? "Keep only the core meaning; remove brand words or generic descriptors if they are not essential." : "",
+        "Return only the shortened English text.",
+      ].filter(Boolean).join(" "));
+      return [direction.instruction, ...extras].filter(Boolean).join(" ");
+    }
 
     if (isSingleLine) {
       extras.push(targetIsEnglish
         ? [
-            "This source is a single-line PowerPoint text box, likely a title or label.",
+            `This source is a single-line PowerPoint ${role}.`,
             "Return one concise single-line English phrase.",
             `Aim to stay within ${budget.words} words and about ${budget.characters} characters if possible.`,
-            "Prefer terse heading wording, noun phrases, and standard abbreviations; omit unnecessary articles and filler words.",
+            "Prefer terse heading wording, noun phrases, standard abbreviations, ampersands (&), slash forms (/), and colon labels when natural.",
+            "Omit unnecessary articles, filler words, and explanatory connectors.",
             "Do not expand it into a sentence.",
           ].join(" ")
         : [
-            "This source is a single-line PowerPoint text box, likely a title or label.",
+            `This source is a single-line PowerPoint ${role}.`,
             "Return one concise single-line translation with similar visual length.",
             "Do not expand it into a sentence.",
           ].join(" "));
@@ -3681,7 +3782,8 @@ function buildSegmentTranslationInstruction(direction, segment) {
         ? [
             "This source is a multi-line PowerPoint text box.",
             "Keep the translation compact enough to fit the original text box.",
-            "Use concise sentence fragments where natural and avoid explanatory expansion.",
+            "Use compact bullet-style wording or concise sentence fragments where natural.",
+            "Avoid explanatory expansion, long relative clauses, and repeated subjects.",
           ].join(" ")
         : "This source is a multi-line PowerPoint text box; keep the translation compact enough to fit the original text box.");
     }
@@ -3700,4 +3802,15 @@ function getPptTranslationLengthBudget(segment) {
   const words = Math.max(2, Math.min(12, Math.round(characters / 6)));
 
   return { characters, words };
+}
+
+function getPptSegmentRole(segment) {
+  const layout = segment?.layout || {};
+  const fontPt = getPptSegmentFontPt(segment);
+  const y = Number(layout.bounds?.y || 0);
+  const topRatio = state.slideSize?.cy ? y / state.slideSize.cy : 1;
+
+  if (fontPt >= 28 || (topRatio < 0.22 && fontPt >= 18)) return "title";
+  if (shouldUseSingleLine(segment)) return "label";
+  return "body text";
 }
