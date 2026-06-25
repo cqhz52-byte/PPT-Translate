@@ -83,7 +83,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v53";
+const APP_VERSION = "v54";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -109,7 +109,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=53").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=54").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -1145,8 +1145,8 @@ async function translateAll() {
   const model = els.modelName.value.trim();
   const direction = getDirectionConfig(els.translationDirection.value);
 
-  if (!apiKey || !model) {
-    showToast("请先填写模型和 API Key。", true);
+  if (!model) {
+    showToast("请先填写模型。API Key 可留空使用 Cloudflare 后端配置。", true);
     return;
   }
 
@@ -1275,8 +1275,8 @@ async function processBatchQueue() {
 
   const apiKey = els.apiKey.value.trim();
   const model = els.modelName.value.trim();
-  if (!apiKey || !model) {
-    showToast("请先填写模型和 API Key。", true);
+  if (!model) {
+    showToast("请先填写模型。API Key 可留空使用 Cloudflare 后端配置。", true);
     return;
   }
 

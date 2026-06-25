@@ -237,7 +237,7 @@ export function loginPage(message = "") {
     </main>
     <script>
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/sw.js?v=53").then((registration) => {
+        navigator.serviceWorker.register("/sw.js?v=54").then((registration) => {
           registration.update().catch(() => {});
           if (registration.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" });
         }).catch(() => {});
