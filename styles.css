@@ -253,6 +253,7 @@ h2 {
 }
 
 .workspace {
+  --workspace-panel-height: calc(100vh - 178px);
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   gap: 18px;
@@ -275,6 +276,8 @@ h2 {
   display: grid;
   align-content: start;
   gap: 18px;
+  max-height: var(--workspace-panel-height);
+  overflow: auto;
   padding: 18px;
 }
 
@@ -592,7 +595,8 @@ textarea:focus {
   min-width: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  max-height: calc(100vh - 178px);
+  height: var(--workspace-panel-height);
+  max-height: var(--workspace-panel-height);
   overflow: hidden;
 }
 
@@ -1353,10 +1357,13 @@ td:first-child {
   .sidebar {
     position: static;
     gap: 14px;
+    max-height: none;
+    overflow: visible;
     padding: 14px;
   }
 
   .panel {
+    height: auto;
     max-height: none;
   }
 
