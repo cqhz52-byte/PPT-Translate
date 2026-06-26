@@ -85,7 +85,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v61";
+const APP_VERSION = "v62";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -111,7 +111,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=61").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=62").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -1153,6 +1153,8 @@ async function translateAll() {
     return;
   }
 
+  return translateAllConcurrent({ apiKey, apiBase, apiProxy, model, direction });
+
   if (state.translationRunning) return false;
   const abortController = new AbortController();
   state.translationRunning = true;
@@ -1246,6 +1248,135 @@ async function translateAll() {
     state.translationRunning = false;
     setBusy(false);
   }
+}
+
+async function translateAllConcurrent({ apiKey, apiBase, apiProxy, model, direction }) {
+  if (state.translationRunning) return false;
+  const abortController = new AbortController();
+  state.translationRunning = true;
+  state.translationAbortController = abortController;
+
+  try {
+    setBusy(true, "正在翻译...");
+    const untranslated = state.segments.filter((segment) => !segment.translation.trim());
+    const total = untranslated.length;
+    const concurrency = Math.min(total || 1, getTranslationConcurrency());
+    let cursor = 0;
+    let completed = 0;
+
+    const workers = Array.from({ length: concurrency }, async () => {
+      while (cursor < total) {
+        if (abortController.signal.aborted) throw new DOMException("Translation stopped", "AbortError");
+        const index = cursor;
+        cursor += 1;
+        const segment = untranslated[index];
+        setStatus(`正在并行翻译：${completed + 1}/${total}，并发 ${concurrency} 路...`);
+        await translateSegmentWithLayoutFit({
+          apiBase,
+          apiProxy,
+          apiKey,
+          model,
+          direction,
+          segment,
+          index,
+          total,
+          signal: abortController.signal,
+        });
+        completed += 1;
+        setProgress(total ? completed / total : 1);
+        updateTextarea(segment);
+        updateStats();
+        scheduleCurrentDraftSave();
+      }
+    });
+
+    await Promise.all(workers);
+    setProgress(1);
+    setStatus("翻译完成，请检查译文后导出。");
+    showToast("自动翻译完成。");
+    scheduleCurrentDraftSave({ immediate: true });
+    return true;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      setStatus("已停止翻译。已完成的译文会保留，可继续编辑或再次点击自动翻译续翻。");
+      showToast("已停止翻译。");
+      scheduleCurrentDraftSave({ immediate: true });
+      return false;
+    }
+    showToast(error.message || "翻译失败。", true);
+    setStatus("翻译中断，请检查接口配置或网络连接。");
+    return false;
+  } finally {
+    if (state.translationAbortController === abortController) {
+      state.translationAbortController = null;
+    }
+    state.translationRunning = false;
+    setBusy(false);
+  }
+}
+
+async function translateSegmentWithLayoutFit({ apiBase, apiProxy, apiKey, model, direction, segment, index, total, signal }) {
+  segment.translation = await translateText({
+    apiBase,
+    apiProxy,
+    apiKey,
+    model,
+    direction,
+    segment,
+    text: segment.original,
+    signal,
+  });
+
+  let shortenAttempts = 0;
+  while (shouldShortenPptSingleLineTranslation(segment, direction) && shortenAttempts < 2) {
+    setStatus(`正在压缩标题译文 ${segment.locationLabel || segment.slideNumber}：${index + 1}/${total}`);
+    const shortened = await translateText({
+      apiBase,
+      apiProxy,
+      apiKey,
+      model,
+      direction,
+      segment,
+      text: buildPptShorteningRequest(segment, shortenAttempts),
+      mode: shortenAttempts === 0 ? "shorten" : "ultraShort",
+      signal,
+    });
+    if (shortened && estimatePptTextWidthPt(shortened, getPptSegmentFontPt(segment)) <= estimatePptTextWidthPt(segment.translation, getPptSegmentFontPt(segment))) {
+      segment.translation = shortened;
+    } else {
+      break;
+    }
+    shortenAttempts += 1;
+  }
+
+  let boxFitAttempts = 0;
+  while (shouldShortenPptBoxTranslation(segment, direction) && boxFitAttempts < 2) {
+    setStatus(`正在压缩文本框译文 ${segment.locationLabel || segment.slideNumber}：${index + 1}/${total}`);
+    const shortened = await translateText({
+      apiBase,
+      apiProxy,
+      apiKey,
+      model,
+      direction,
+      segment,
+      text: buildPptBoxFitRequest(segment, boxFitAttempts),
+      mode: boxFitAttempts === 0 ? "boxFit" : "boxFitStrict",
+      signal,
+    });
+    if (shortened && isPptBoxFitTranslationBetter(segment, shortened)) {
+      segment.translation = normalizeTranslation(shortened, segment.original, segment);
+    } else {
+      break;
+    }
+    boxFitAttempts += 1;
+  }
+}
+
+function getTranslationConcurrency() {
+  if (state.fileType === "pdf") return 5;
+  if (state.fileType === "docx") return 5;
+  if (state.fileType === "pptx") return 3;
+  return 4;
 }
 
 async function translateText({ apiBase, apiProxy, apiKey, model, direction, segment = null, text, mode = "translate", signal }) {
