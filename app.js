@@ -100,7 +100,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v81";
+const APP_VERSION = "v82";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -2679,7 +2679,7 @@ async function downloadPdfTranslation() {
   setProgress(0.43);
   setStatus("正在嵌入译文字体...");
   await waitForUiFrame();
-  const font = await pdfDoc.embedFont(fontBytes, { subset: true });
+  const font = await pdfDoc.embedFont(fontBytes, { subset: false });
   const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.layout?.bounds);
   const overlayPlans = [];
 
