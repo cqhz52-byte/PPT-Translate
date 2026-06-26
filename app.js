@@ -85,7 +85,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v66";
+const APP_VERSION = "v67";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -120,7 +120,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=66").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=67").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -578,12 +578,28 @@ async function loadPdfDocument(file) {
       console.warn("PDF background sampling failed", error);
       return null;
     });
+    const pageWidth = viewport.width || 595.28;
+    const pageHeight = viewport.height || 841.89;
     const content = await page.getTextContent();
-    const lines = extractPdfLineSegments(content.items, viewport.width || 595.28);
+    const lines = extractPdfLineSegments(content.items, pageWidth);
+    const pdfTextBlocks = mergePdfTextBlocks(
+      lines.map((line) => {
+        const tableCell = findPdfTableCell(line.bounds, tableCells);
+        const sampledBackground = samplePdfBackgroundColor(pageSample, line.bounds, pageWidth, pageHeight);
+        const backgroundColor = normalizePdfBackgroundColor(sampledBackground, Boolean(tableCell));
+        return {
+          ...line,
+          tableCell,
+          backgroundColor,
+          textColor: getReadablePdfTextColor(backgroundColor),
+        };
+      }),
+      pageWidth,
+      pageHeight
+    );
 
-    lines.forEach((line, index) => {
-      const tableCell = findPdfTableCell(line.bounds, tableCells);
-      const backgroundColor = samplePdfBackgroundColor(pageSample, line.bounds, viewport.width || 595.28, viewport.height || 841.89);
+    pdfTextBlocks.forEach((line, index) => {
+      const tableCell = line.tableCell || null;
       state.segments.push({
         id: `pdf-${pageNumber}-${index}`,
         type: "pdf",
@@ -600,8 +616,9 @@ async function loadPdfDocument(file) {
           rowSegmentCount: tableCell ? Math.max(2, line.rowSegmentCount) : line.rowSegmentCount,
           tableCell,
           cellAlign: tableCell ? inferPdfCellAlign(line.bounds, tableCell, line.text) : "",
-          backgroundColor,
-          textColor: getReadablePdfTextColor(backgroundColor),
+          backgroundColor: line.backgroundColor,
+          textColor: line.textColor,
+          mergedLineCount: line.mergedLineCount || 1,
         },
         overrides: createSegmentOverrides(),
         original: line.text,
@@ -708,6 +725,130 @@ function samplePdfBackgroundColor(sample, bounds, pageWidth, pageHeight) {
     console.warn("PDF background sample unavailable", error);
     return { r: 1, g: 1, b: 1 };
   }
+}
+
+function normalizePdfBackgroundColor(color, preserveTint = false) {
+  const background = color || { r: 1, g: 1, b: 1 };
+  if (preserveTint) return background;
+
+  const luminance = 0.2126 * background.r + 0.7152 * background.g + 0.0722 * background.b;
+  const isNearWhite = luminance > 0.86 && background.r > 0.8 && background.g > 0.8 && background.b > 0.8;
+  return isNearWhite ? { r: 1, g: 1, b: 1 } : background;
+}
+
+function mergePdfTextBlocks(lines, pageWidth, pageHeight) {
+  const fixed = [];
+  const flowByColumn = new Map();
+
+  lines.forEach((line, sourceIndex) => {
+    const enriched = { ...line, sourceIndex };
+    if (line.tableCell || shouldKeepPdfLineSeparate(line, pageWidth, pageHeight)) {
+      fixed.push(enriched);
+      return;
+    }
+
+    const column = getPdfLineColumn(line, pageWidth);
+    if (!flowByColumn.has(column)) flowByColumn.set(column, []);
+    flowByColumn.get(column).push(enriched);
+  });
+
+  const merged = [];
+  flowByColumn.forEach((columnLines, column) => {
+    const sorted = columnLines.sort((a, b) => b.bounds.y - a.bounds.y || a.bounds.x - b.bounds.x);
+    let current = [];
+
+    sorted.forEach((line) => {
+      const previous = current[current.length - 1];
+      if (previous && shouldStartNewPdfBlock(current, previous, line)) {
+        merged.push(createMergedPdfBlock(current, column, pageWidth));
+        current = [];
+      }
+      current.push(line);
+    });
+
+    if (current.length) merged.push(createMergedPdfBlock(current, column, pageWidth));
+  });
+
+  return [...fixed, ...merged].sort((a, b) => {
+    const aColumn = Number.isFinite(a.readingColumn) ? a.readingColumn : getPdfLineColumn(a, pageWidth);
+    const bColumn = Number.isFinite(b.readingColumn) ? b.readingColumn : getPdfLineColumn(b, pageWidth);
+    if (aColumn !== bColumn) return aColumn - bColumn;
+    return b.bounds.y - a.bounds.y || a.bounds.x - b.bounds.x || a.sourceIndex - b.sourceIndex;
+  });
+}
+
+function shouldKeepPdfLineSeparate(line, pageWidth, pageHeight) {
+  const text = String(line.text || "").trim();
+  const characters = [...text].length;
+  const bounds = line.bounds || { x: 0, y: 0, width: 0 };
+  const centerX = bounds.x + bounds.width / 2;
+  const isCentered = Math.abs(centerX - pageWidth / 2) < pageWidth * 0.16;
+  const nearTop = bounds.y > pageHeight - 90;
+  const nearBottom = bounds.y < 48;
+
+  return characters <= 3 || (nearTop && isCentered) || nearBottom;
+}
+
+function getPdfLineColumn(line, pageWidth) {
+  const bounds = line.bounds || { x: 0, width: 0 };
+  const centerX = bounds.x + bounds.width / 2;
+  if (centerX < pageWidth * 0.5) return 0;
+  return 1;
+}
+
+function shouldStartNewPdfBlock(current, previous, line) {
+  const first = current[0];
+  const fontSize = Math.max(6, previous.fontSize || line.fontSize || 10);
+  const verticalGap = previous.bounds.y - line.bounds.y;
+  const xDeltaFromBlock = Math.abs(line.bounds.x - first.bounds.x);
+  const xDeltaFromPrevious = Math.abs(line.bounds.x - previous.bounds.x);
+  const previousEndsHard = /[。！？.!?;；:]$/.test(String(previous.text || "").trim());
+
+  if (verticalGap > fontSize * 1.85) return true;
+  if (previousEndsHard && xDeltaFromBlock > fontSize * 1.8 && xDeltaFromPrevious > fontSize * 1.4) return true;
+  return false;
+}
+
+function createMergedPdfBlock(lines, column, pageWidth) {
+  if (lines.length === 1) {
+    return { ...lines[0], readingColumn: column };
+  }
+
+  const minX = Math.min(...lines.map((line) => line.bounds.x));
+  const minY = Math.min(...lines.map((line) => line.bounds.y));
+  const maxX = Math.max(...lines.map((line) => line.bounds.x + line.bounds.width));
+  const maxY = Math.max(...lines.map((line) => line.bounds.y + line.bounds.height));
+  const fontSize = medianNumber(lines.map((line) => line.fontSize || 10));
+  const rightLimit = column === 0 && pageWidth > 460 ? pageWidth * 0.49 : pageWidth - 30;
+  const availableWidth = Math.max(maxX - minX, rightLimit - minX, ...lines.map((line) => line.availableWidth || 0));
+  const bounds = {
+    x: minX,
+    y: minY,
+    width: Math.max(8, availableWidth),
+    height: Math.max(8, maxY - minY),
+  };
+
+  return {
+    text: lines.map((line) => line.text).join(" ").replace(/\s+/g, " ").trim(),
+    fontSize,
+    availableWidth,
+    availableHeight: Math.max(bounds.height, ...lines.map((line) => line.availableHeight || 0)),
+    rowSegmentCount: 1,
+    mergedLineCount: lines.length,
+    bounds,
+    tableCell: null,
+    cellAlign: "",
+    backgroundColor: lines[0].backgroundColor || { r: 1, g: 1, b: 1 },
+    textColor: lines[0].textColor || { r: 0.06, g: 0.08, b: 0.09 },
+    readingColumn: column,
+    sourceIndex: lines[0].sourceIndex,
+  };
+}
+
+function medianNumber(values) {
+  const numbers = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!numbers.length) return 10;
+  return numbers[Math.floor(numbers.length / 2)];
 }
 
 function medianByte(values) {
@@ -2511,18 +2652,19 @@ function addPdfBorderLine(lines, x1, y1, x2, y2) {
 }
 
 function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout = null) {
-  const sourceFontSize = Math.max(4, Math.min(24, Number(sourceSize || 10) * 0.96));
   const isTableLike = Number(layout?.rowSegmentCount || 1) > 1;
+  const isFlowBlock = Number(layout?.mergedLineCount || 1) > 1 && !layout?.tableCell;
+  const sourceFontSize = Math.max(3.8, Math.min(24, Number(sourceSize || 10) * (isFlowBlock ? 0.82 : 0.96)));
   const preferred = sourceFontSize;
   const targetWidth = Math.max(4, bounds.width);
-  const maxHeight = Math.max(5, bounds.height * (isTableLike ? 0.9 : 0.96));
-  const minSize = Math.max(4.2, preferred * (isTableLike ? 0.64 : 0.58));
+  const maxHeight = Math.max(5, bounds.height * (isTableLike ? 0.9 : isFlowBlock ? 0.94 : 0.96));
+  const minSize = Math.max(isFlowBlock ? 3.4 : 4.2, preferred * (isTableLike ? 0.64 : isFlowBlock ? 0.48 : 0.58));
 
   const textWidthAtPreferred = Math.max(0.1, font.widthOfTextAtSize(text, preferred));
   const estimatedSize = Math.min(preferred, (preferred * targetWidth) / textWidthAtPreferred);
 
   for (let size = preferred; size >= minSize; size -= 0.25) {
-    const lineHeight = getPdfLineHeight(size, isTableLike);
+    const lineHeight = getPdfLineHeight(size, isTableLike, isFlowBlock);
     const lines = wrapPdfText(text, font, size, targetWidth);
     if (getPdfTextBlockHeight(lines, size, lineHeight) <= maxHeight) {
       return { fontSize: size, lines, lineHeight };
@@ -2530,7 +2672,7 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout 
   }
 
   for (let size = estimatedSize; size >= minSize; size -= 0.25) {
-    const lineHeight = getPdfLineHeight(size, isTableLike);
+    const lineHeight = getPdfLineHeight(size, isTableLike, isFlowBlock);
     const lines = wrapPdfText(text, font, size, targetWidth);
     if (getPdfTextBlockHeight(lines, size, lineHeight) <= maxHeight) {
       return { fontSize: size, lines, lineHeight };
@@ -2538,18 +2680,18 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout 
   }
 
   for (let size = minSize; size >= 3.6; size -= 0.2) {
-    const lineHeight = getPdfLineHeight(size, isTableLike);
+    const lineHeight = getPdfLineHeight(size, isTableLike, isFlowBlock);
     const lines = wrapPdfText(text, font, size, targetWidth);
     if (getPdfTextBlockHeight(lines, size, lineHeight) <= maxHeight) {
       return { fontSize: size, lines, lineHeight };
     }
   }
 
-  return { fontSize: minSize, lines: wrapPdfText(text, font, minSize, targetWidth), lineHeight: getPdfLineHeight(minSize, isTableLike) };
+  return { fontSize: minSize, lines: wrapPdfText(text, font, minSize, targetWidth), lineHeight: getPdfLineHeight(minSize, isTableLike, isFlowBlock) };
 }
 
-function getPdfLineHeight(size, isTableLike) {
-  return size * (isTableLike ? 1.28 : 1.36);
+function getPdfLineHeight(size, isTableLike, isFlowBlock = false) {
+  return size * (isTableLike ? 1.28 : isFlowBlock ? 1.24 : 1.36);
 }
 
 function getPdfBaselineOffset(fontSize) {
