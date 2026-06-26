@@ -100,7 +100,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v84";
+const APP_VERSION = "v85";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -571,6 +571,7 @@ async function loadPdfDocument(file) {
   state.pdfBytes = pdfBytes.slice();
   const pdf = await pdfjs.getDocument({ data: pdfBytes }).promise;
   state.slideCount = pdf.numPages;
+  let pdfReferenceSectionStarted = false;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     setProgress(pdf.numPages ? pageNumber / pdf.numPages : 0);
@@ -592,6 +593,8 @@ async function loadPdfDocument(file) {
     const pageHeight = viewport.height || 841.89;
     const content = await page.getTextContent();
     const lines = extractPdfLineSegments(content.items, pageWidth);
+    const referenceContext = getPdfReferenceContext(lines, pageHeight, pdfReferenceSectionStarted);
+    pdfReferenceSectionStarted = pdfReferenceSectionStarted || referenceContext.startedOnPage;
     lines.forEach((line, index) => {
       const tableCell = findPdfTableCell(line.bounds, tableCells);
       const sampledBackground = samplePdfBackgroundColor(pageSample, line.bounds, pageWidth, pageHeight);
@@ -614,6 +617,7 @@ async function loadPdfDocument(file) {
           cellAlign: tableCell ? inferPdfCellAlign(line.bounds, tableCell, line.text) : "",
           backgroundColor,
           textColor: getReadablePdfTextColor(backgroundColor),
+          isReferenceText: isPdfReferenceLine(line, referenceContext, pageWidth, pageHeight),
         },
         overrides: createSegmentOverrides(),
         original: line.text,
@@ -983,6 +987,49 @@ function extractPdfLineSegments(items, pageWidth = 595.28) {
       return splitPdfRowIntoSegments(row, pageWidth, rowGap);
     })
     .filter((line) => line.text);
+}
+
+function getPdfReferenceContext(lines, pageHeight, alreadyStarted = false) {
+  const heading = lines.find((line) => isPdfReferencesHeading(line.text));
+
+  return {
+    active: alreadyStarted || Boolean(heading),
+    startedOnPage: Boolean(heading),
+    headingY: heading?.bounds?.y ?? (alreadyStarted ? pageHeight + 1 : -1),
+  };
+}
+
+function isPdfReferencesHeading(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+  return /^(references|bibliography|参考文献|參考文獻)$/.test(normalized);
+}
+
+function isPdfReferenceLine(line, context, pageWidth, pageHeight) {
+  const text = String(line?.text || "").replace(/\s+/g, " ").trim();
+  if (!text || isPdfReferencesHeading(text)) return false;
+  if (isLikelyPdfReferenceCitationLine(text)) return true;
+
+  const bounds = line?.bounds || {};
+  const belowSamePageHeading = context?.startedOnPage && Number(bounds.y || 0) < Number(context.headingY || 0) - 2;
+  const rightColumnAfterHeading = context?.startedOnPage && Number(bounds.x || 0) > pageWidth * 0.46;
+  const laterReferencePage = context?.active && !context?.startedOnPage && Number(bounds.y || 0) < pageHeight * 0.94;
+
+  return (belowSamePageHeading || rightColumnAfterHeading || laterReferencePage) && isLikelyPdfReferenceContinuation(text);
+}
+
+function isLikelyPdfReferenceCitationLine(text) {
+  return /^\s*(?:\[\s*\d+\s*\]|\d+\.)\s+/.test(text);
+}
+
+function isLikelyPdfReferenceContinuation(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+
+  const initialCount = (normalized.match(/\b[A-Z]\./g) || []).length;
+  const hasCitationSyntax = /(?:https?:\/\/|doi\.org|doi:|et al\.|\(\d{4}\)|\b\d+\s*\(\d+\)|\b\d{4}\s*[,;]\s*\d+|\b(?:J|Nat|Sci|Cancer|Oncol|Radiol|Med|Clin|Rep|BMJ|PLoS)\.)/i.test(normalized);
+  const hasJournalShape = initialCount >= 2 && /[,;]/.test(normalized) && /\b\d{4}\b/.test(normalized);
+
+  return hasCitationSyntax || hasJournalShape;
 }
 
 function splitPdfRowIntoSegments(row, pageWidth, rowGap = 0) {
@@ -2963,7 +3010,7 @@ function getPdfExportText(segment) {
 }
 
 function shouldKeepPdfSourceText(segment) {
-  return isLikelyPdfPublicationFurniture(segment) || isLikelyPdfAuthorByline(segment);
+  return Boolean(segment?.layout?.isReferenceText) || isLikelyPdfPublicationFurniture(segment) || isLikelyPdfAuthorByline(segment);
 }
 
 function isLikelyPdfPublicationFurniture(segment) {
@@ -3023,6 +3070,7 @@ function getPdfTargetLanguageQualityWarning(direction = getDirectionConfig(els.t
   const candidates = state.segments.filter((segment) =>
     segment.type === "pdf" &&
     segment.layout?.bounds &&
+    !shouldKeepPdfSourceText(segment) &&
     shouldExpectHanTranslation(segment.original, direction, segment)
   );
   if (!candidates.length) return "";
@@ -3048,6 +3096,7 @@ function shouldRetryTranslationForTarget(translation, source, direction, segment
 
 function shouldExpectHanTranslation(source, direction, segment = null) {
   if (direction?.targetCode !== "zh") return false;
+  if (shouldKeepPdfSourceText(segment)) return false;
   const text = String(source || "").trim();
   if (!text || containsHanCharacters(text)) return false;
   const letters = text.match(/[A-Za-z]+/g) || [];
