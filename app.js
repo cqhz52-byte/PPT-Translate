@@ -100,7 +100,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v83";
+const APP_VERSION = "v84";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -2739,19 +2739,19 @@ function createPdfOverlayPlan(segment, font) {
 
   const fitBounds = cell
     ? { x: cell.x + 2, y: cell.y + 2, width: Math.max(4, cell.width - 4), height: Math.max(4, cell.height - 4) }
-    : {
-        ...sourceBounds,
-        width: Math.max(sourceBounds.width, Number(segment.layout.availableWidth || 0)),
-        height: Math.max(sourceBounds.height, Number(segment.layout.availableHeight || 0)),
-      };
-  const isTableLike = Boolean(cell) || Number(segment.layout.rowSegmentCount || 1) > 1;
+    : getPdfOverlayFitBounds(segment, font, text, sourceBounds);
+  const isTableLike = Boolean(cell);
   const sourceFontSize = Math.max(4, Math.min(28, Number(segment.layout.fontSize || 10)));
   const paddingX = isTableLike ? Math.max(1.2, sourceFontSize * 0.12) : Math.max(2, sourceFontSize * 0.16);
   const paddingY = isTableLike ? Math.max(1, sourceFontSize * 0.1) : Math.max(1.5, sourceFontSize * 0.12);
-  const eraseBaseX = Math.min(sourceBounds.x, fitBounds.x);
-  const eraseBaseY = Math.min(sourceBounds.y, fitBounds.y);
-  const eraseBaseRight = Math.max(sourceBounds.x + sourceBounds.width, fitBounds.x + fitBounds.width);
-  const eraseBaseTop = Math.max(sourceBounds.y + sourceBounds.height, fitBounds.y + fitBounds.height);
+  const eraseBaseX = isTableLike ? Math.min(sourceBounds.x, fitBounds.x) : sourceBounds.x;
+  const eraseBaseY = isTableLike ? Math.min(sourceBounds.y, fitBounds.y) : sourceBounds.y;
+  const eraseBaseRight = isTableLike
+    ? Math.max(sourceBounds.x + sourceBounds.width, fitBounds.x + fitBounds.width)
+    : sourceBounds.x + sourceBounds.width;
+  const eraseBaseTop = isTableLike
+    ? Math.max(sourceBounds.y + sourceBounds.height, fitBounds.y + fitBounds.height)
+    : sourceBounds.y + sourceBounds.height;
   const eraseWidth = Math.max(2, eraseBaseRight - eraseBaseX + paddingX * 2);
   const eraseHeight = Math.max(
     eraseBaseTop - eraseBaseY + paddingY * 2,
@@ -2789,6 +2789,27 @@ function createPdfOverlayPlan(segment, font) {
     textColor,
     cellAlign: segment.layout.cellAlign,
     y,
+  };
+}
+
+function getPdfOverlayFitBounds(segment, font, text, sourceBounds) {
+  const layout = segment.layout || {};
+  const sourceWidth = Math.max(4, Number(sourceBounds.width || 0));
+  const sourceHeight = Math.max(5, Number(sourceBounds.height || 0));
+  const sourceFontSize = Math.max(4, Math.min(28, Number(layout.fontSize || 10)));
+  const textWidth = Math.max(0, font.widthOfTextAtSize(String(text || ""), sourceFontSize));
+  const rowSegments = Number(layout.rowSegmentCount || 1);
+  const compactRow = rowSegments > 1 || sourceWidth < 110 || sourceFontSize <= 8.5;
+  const widthMultiplier = compactRow ? 1.14 : 1.38;
+  const widthPad = Math.max(8, sourceFontSize * (compactRow ? 0.8 : 1.4));
+  const targetWidth = Math.max(sourceWidth, Math.min(textWidth * 1.04, sourceWidth * widthMultiplier + widthPad));
+  const availableHeight = Number(layout.availableHeight || 0);
+  const targetHeight = Math.max(sourceHeight, Math.min(Math.max(sourceHeight, availableHeight), sourceHeight * 1.55));
+
+  return {
+    ...sourceBounds,
+    width: Math.max(4, targetWidth),
+    height: Math.max(5, targetHeight),
   };
 }
 
@@ -2923,6 +2944,8 @@ function drawPdfOverlayText(page, plan, font, rgb) {
 }
 
 function getPdfExportText(segment) {
+  if (shouldKeepPdfSourceText(segment)) return "";
+
   const text = applyTerminologyRules(String(segment.translation || "").trim(), segment.original);
   if (!text) return "";
 
@@ -2937,6 +2960,43 @@ function getPdfExportText(segment) {
   }
 
   return text;
+}
+
+function shouldKeepPdfSourceText(segment) {
+  return isLikelyPdfPublicationFurniture(segment) || isLikelyPdfAuthorByline(segment);
+}
+
+function isLikelyPdfPublicationFurniture(segment) {
+  if (segment?.type !== "pdf") return false;
+  const text = String(segment.original || "").replace(/\s+/g, " ").trim();
+  if (!text || containsHanCharacters(text)) return false;
+
+  const bounds = segment.layout?.bounds;
+  const pageHeight = state.pdfPageSizes.get(segment.path)?.height || 841.89;
+  const inTopFurnitureZone = bounds ? bounds.y > pageHeight * 0.68 : false;
+  if (!inTopFurnitureZone) return false;
+
+  return /(?:ScienceDirect|Elsevier|contents lists available|journal homepage|www\.|ISSN|Lung Cancer\s+\d|^Lung Cancer$)/i.test(text);
+}
+
+function isLikelyPdfAuthorByline(segment) {
+  if (segment?.type !== "pdf") return false;
+  const text = String(segment.original || "").replace(/\s+/g, " ").trim();
+  if (!text || containsHanCharacters(text)) return false;
+
+  const bounds = segment.layout?.bounds;
+  const pageHeight = state.pdfPageSizes.get(segment.path)?.height || 841.89;
+  const fontSize = Number(segment.layout?.fontSize || 10);
+  const inTitleArea = bounds ? bounds.y > pageHeight * 0.42 && bounds.y < pageHeight * 0.72 : false;
+  if (!inTitleArea || fontSize < 6 || fontSize > 14) return false;
+
+  const nameWords = text.match(/\b[A-Z][a-z]+(?:[-'][A-Z][a-z]+)?\b/g) || [];
+  const lowerWords = text.match(/\b[a-z]{3,}\b/g) || [];
+  const hasAffiliationMarkers = /(?:\*|\b[a-z]\s*,|\b[a-z]\s*$|,\s*[a-z]\b)/.test(text);
+  const hasNameShape = nameWords.length >= 2 && nameWords.length <= 18;
+  const mostlyNames = lowerWords.length <= Math.max(1, Math.floor(nameWords.length * 0.45));
+
+  return hasNameShape && hasAffiliationMarkers && /[,;]/.test(text) && mostlyNames;
 }
 
 function shouldSkipSegmentForDirection(segment, direction) {
