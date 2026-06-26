@@ -100,7 +100,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v82";
+const APP_VERSION = "v83";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -727,7 +727,9 @@ function normalizePdfBackgroundColor(color, preserveTint = false) {
   if (preserveTint) return background;
 
   const luminance = 0.2126 * background.r + 0.7152 * background.g + 0.0722 * background.b;
-  const isNearWhite = luminance > 0.86 && background.r > 0.8 && background.g > 0.8 && background.b > 0.8;
+  const maxChannel = Math.max(background.r, background.g, background.b);
+  const minChannel = Math.min(background.r, background.g, background.b);
+  const isNearWhite = luminance > 0.965 && minChannel > 0.94 && maxChannel - minChannel < 0.035;
   return isNearWhite ? { r: 1, g: 1, b: 1 } : background;
 }
 
