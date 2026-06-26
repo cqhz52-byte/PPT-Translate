@@ -1050,6 +1050,12 @@ td:first-child {
   opacity: 0.78;
 }
 
+.preview-item.source,
+.slide-text-box.source {
+  border-color: rgba(22, 90, 114, 0.42);
+  background: rgba(228, 240, 243, 0.72);
+}
+
 .preview-item p {
   margin: 0;
   white-space: pre-wrap;

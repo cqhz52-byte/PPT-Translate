@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=73">
+    <link rel="stylesheet" href="styles.css?v=74">
   </head>
   <body>
     <main class="shell">
@@ -17,7 +17,7 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="CuraWay">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v73 · 主页面语种选择与总结符号清理</p>
+            <p class="version">v74 · 待翻译文献预览</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -134,6 +134,7 @@
 
           <div class="actions mobile-view-pane" data-mobile-pane="translate">
             <button id="batchTranslateButton" type="button" disabled>批量翻译并保存</button>
+            <button id="sourcePreviewButton" type="button" disabled>预览待翻译文献</button>
             <button id="translateButton" class="primary" type="button" disabled>自动翻译</button>
             <button id="summaryButton" type="button" disabled>总结文献主要内容</button>
             <button id="previewButton" type="button" disabled>版式预览/调整</button>
@@ -216,7 +217,7 @@
         <header class="preview-head">
           <div>
             <p class="eyebrow">Preview</p>
-            <h2>译文预览</h2>
+            <h2 id="previewTitle">译文预览</h2>
             <p id="previewMeta">按页面/部件预览最终写入文件的文字。</p>
           </div>
           <div class="preview-actions">
@@ -299,6 +300,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=73" type="module"></script>
+    <script src="app.js?v=74" type="module"></script>
   </body>
 </html>

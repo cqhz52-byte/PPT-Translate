@@ -28,6 +28,7 @@ const state = {
   pullDistance: 0,
   pullCheckReady: false,
   pullIndicator: null,
+  previewMode: "translation",
 };
 
 const els = {
@@ -37,6 +38,7 @@ const els = {
   segmentTable: document.querySelector("#segmentTable"),
   translateButton: document.querySelector("#translateButton"),
   batchTranslateButton: document.querySelector("#batchTranslateButton"),
+  sourcePreviewButton: document.querySelector("#sourcePreviewButton"),
   previewButton: document.querySelector("#previewButton"),
   layoutPreviewButton: document.querySelector("#layoutPreviewButton"),
   downloadButton: document.querySelector("#downloadButton"),
@@ -62,6 +64,7 @@ const els = {
   previewDownloadButton: document.querySelector("#previewDownloadButton"),
   previewShareButton: document.querySelector("#previewShareButton"),
   previewBody: document.querySelector("#previewBody"),
+  previewTitle: document.querySelector("#previewTitle"),
   previewMeta: document.querySelector("#previewMeta"),
   translationDirection: document.querySelector("#translationDirection"),
   pptLayoutMode: document.querySelector("#pptLayoutMode"),
@@ -93,7 +96,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v73";
+const APP_VERSION = "v74";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -128,7 +131,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=73").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=74").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -431,6 +434,7 @@ setMobileView(state.mobileView);
 
 els.translateButton.addEventListener("click", handleTranslateButtonClick);
 els.batchTranslateButton?.addEventListener("click", processBatchQueue);
+els.sourcePreviewButton?.addEventListener("click", openSourcePreview);
 els.previewButton.addEventListener("click", openPreview);
 els.layoutPreviewButton?.addEventListener("click", openPreview);
 els.summaryButton?.addEventListener("click", summarizeDocument);
@@ -2393,6 +2397,9 @@ function updateStats() {
   els.segmentCount.textContent = String(state.segments.length);
   els.translatedCount.textContent = String(translated);
   updateTranslateButtonState(document.body.classList.contains("is-busy") || state.batchRunning);
+  if (els.sourcePreviewButton) {
+    els.sourcePreviewButton.disabled = !state.segments.length;
+  }
   els.previewButton.disabled = !state.segments.length;
   if (els.layoutPreviewButton) {
     els.layoutPreviewButton.disabled = !state.segments.length;
@@ -2432,6 +2439,9 @@ function setMobileView(view) {
 function setBusy(isBusy, message = "") {
   const effectiveBusy = isBusy || state.batchRunning;
   updateTranslateButtonState(effectiveBusy);
+  if (els.sourcePreviewButton) {
+    els.sourcePreviewButton.disabled = effectiveBusy || !state.segments.length;
+  }
   els.previewButton.disabled = effectiveBusy || !state.segments.length;
   if (els.layoutPreviewButton) {
     els.layoutPreviewButton.disabled = effectiveBusy || !state.segments.length;
@@ -2514,7 +2524,18 @@ async function releaseScreenWakeLock() {
 }
 
 function openPreview() {
+  state.previewMode = "translation";
   renderPreview();
+  openPreviewDialog();
+}
+
+function openSourcePreview() {
+  state.previewMode = "source";
+  renderPreview();
+  openPreviewDialog();
+}
+
+function openPreviewDialog() {
   if (typeof els.previewDialog.showModal === "function") {
     els.previewDialog.showModal();
   } else {
@@ -2548,7 +2569,15 @@ function renderPreview() {
   const previousScrollTop = els.previewBody.scrollTop;
   const selectedIndex = els.previewBody.querySelector(".slide-text-box.selected")?.dataset.index || "";
   const translated = state.segments.filter((segment) => segment.translation.trim()).length;
-  els.previewMeta.textContent = `${getFileTypeName()} · ${state.segments.length} 段文字 · ${translated} 段已有译文`;
+  const isSourceMode = state.previewMode === "source";
+  if (els.previewTitle) {
+    els.previewTitle.textContent = isSourceMode ? "待翻译文献预览" : "译文预览";
+  }
+  if (els.previewDownloadButton) els.previewDownloadButton.hidden = isSourceMode;
+  if (els.previewShareButton) els.previewShareButton.hidden = isSourceMode;
+  els.previewMeta.textContent = isSourceMode
+    ? `${getFileTypeName()} · ${state.segments.length} 段原文 · 翻译前预览`
+    : `${getFileTypeName()} · ${state.segments.length} 段文字 · ${translated} 段已有译文`;
   els.previewBody.replaceChildren();
 
   if (!state.segments.length) {
@@ -2968,13 +2997,14 @@ function wrapPdfText(text, font, fontSize, maxWidth) {
 
 function createPreviewItem(segment) {
   const item = document.createElement("article");
-  item.className = `preview-item${segment.translation.trim() ? "" : " pending"}`;
+  const isSourceMode = state.previewMode === "source";
+  item.className = `preview-item${isSourceMode ? " source" : segment.translation.trim() ? "" : " pending"}`;
 
   const text = document.createElement("p");
-  text.textContent = segment.translation.trim() || segment.original;
+  text.textContent = isSourceMode ? segment.original : segment.translation.trim() || segment.original;
 
   const meta = document.createElement("span");
-  meta.textContent = segment.translation.trim() ? "译文" : "未翻译，暂用原文";
+  meta.textContent = isSourceMode ? "原文" : segment.translation.trim() ? "译文" : "未翻译，暂用原文";
 
   item.append(text, meta);
   return item;
@@ -3003,9 +3033,10 @@ function createSlidePreview(segments) {
   segments.forEach((segment) => {
     if (!segment.layout?.bounds) return;
 
+    const isSourceMode = state.previewMode === "source";
     const index = state.segments.indexOf(segment);
     const box = document.createElement("div");
-    box.className = `slide-text-box${segment.translation.trim() ? "" : " pending"}`;
+    box.className = `slide-text-box${isSourceMode ? " source" : segment.translation.trim() ? "" : " pending"}`;
     box.dataset.index = String(index);
     box.tabIndex = 0;
 
@@ -3023,20 +3054,24 @@ function createSlidePreview(segments) {
 
     const text = document.createElement("span");
     text.className = "slide-box-text";
-    text.textContent = segment.translation.trim() || segment.original;
+    text.textContent = isSourceMode ? segment.original : segment.translation.trim() || segment.original;
 
-    const tools = createPreviewBoxTools(segment, index);
-    const resizeHandle = document.createElement("button");
-    resizeHandle.type = "button";
-    resizeHandle.className = "slide-resize-handle";
-    resizeHandle.title = "拖动调整文本框大小";
-    resizeHandle.setAttribute("aria-label", "拖动调整文本框大小");
-    attachPreviewResize(resizeHandle, box, segment);
+    if (isSourceMode) {
+      box.append(text);
+    } else {
+      const tools = createPreviewBoxTools(segment, index);
+      const resizeHandle = document.createElement("button");
+      resizeHandle.type = "button";
+      resizeHandle.className = "slide-resize-handle";
+      resizeHandle.title = "拖动调整文本框大小";
+      resizeHandle.setAttribute("aria-label", "拖动调整文本框大小");
+      attachPreviewResize(resizeHandle, box, segment);
 
-    box.addEventListener("pointerdown", () => selectPreviewBox(box));
-    box.addEventListener("focus", () => selectPreviewBox(box));
-    attachPreviewMove(box, segment);
-    box.append(text, tools, resizeHandle);
+      box.addEventListener("pointerdown", () => selectPreviewBox(box));
+      box.addEventListener("focus", () => selectPreviewBox(box));
+      attachPreviewMove(box, segment);
+      box.append(text, tools, resizeHandle);
+    }
     slide.append(box);
   });
 
