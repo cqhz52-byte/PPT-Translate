@@ -29,6 +29,7 @@ const state = {
   pullCheckReady: false,
   pullIndicator: null,
   previewMode: "translation",
+  activeSummary: null,
 };
 
 const els = {
@@ -48,6 +49,7 @@ const els = {
   summaryDialog: document.querySelector("#summaryDialog"),
   summaryCloseButton: document.querySelector("#summaryCloseButton"),
   summaryCopyButton: document.querySelector("#summaryCopyButton"),
+  summaryShareButton: document.querySelector("#summaryShareButton"),
   summaryMeta: document.querySelector("#summaryMeta"),
   summaryOutput: document.querySelector("#summaryOutput"),
   resetButton: document.querySelector("#resetButton"),
@@ -95,8 +97,10 @@ const SAVED_FILES_STORE = "files";
 const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
+const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
+const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v74";
+const APP_VERSION = "v75";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -131,7 +135,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=74").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=75").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -440,6 +444,7 @@ els.layoutPreviewButton?.addEventListener("click", openPreview);
 els.summaryButton?.addEventListener("click", summarizeDocument);
 els.summaryCloseButton?.addEventListener("click", closeSummary);
 els.summaryCopyButton?.addEventListener("click", copySummary);
+els.summaryShareButton?.addEventListener("click", shareSummary);
 els.summaryDialog?.addEventListener("click", (event) => {
   if (event.target === els.summaryDialog) closeSummary();
 });
@@ -1460,10 +1465,16 @@ async function translateAllConcurrent({ apiKey, apiBase, apiProxy, model, direct
 
     await Promise.all(workers);
     setProgress(1);
-    setStatus("翻译完成，请检查译文后导出。");
-    showToast("自动翻译完成。");
+    const qualityWarning = getPdfTargetLanguageQualityWarning(direction);
+    if (qualityWarning) {
+      setStatus(qualityWarning);
+      showToast(qualityWarning, true);
+    } else {
+      setStatus("翻译完成，请检查译文后导出。");
+      showToast("自动翻译完成。");
+    }
     scheduleCurrentDraftSave({ immediate: true });
-    return true;
+    return !qualityWarning;
   } catch (error) {
     if (error?.name === "AbortError") {
       setStatus("已停止翻译。已完成的译文会保留，可继续编辑或再次点击自动翻译续翻。");
@@ -1559,7 +1570,22 @@ async function translateText({ apiBase, apiProxy, apiKey, model, direction, segm
     signal,
   });
 
-  return normalizeTranslation(result, text, segment);
+  let normalized = normalizeTranslation(result, text, segment);
+  if (shouldRetryTranslationForTarget(normalized, text, direction, segment)) {
+    const retry = await requestAiText({
+      apiBase,
+      apiProxy,
+      apiKey,
+      model,
+      instruction: buildTargetEnforcementInstruction(direction, segment),
+      text,
+      task: "translate",
+      signal,
+    });
+    normalized = normalizeTranslation(retry, text, segment);
+  }
+
+  return normalized;
 }
 
 async function requestAiText({ apiBase, apiProxy, apiKey, model, instruction, text, task = "translate", signal }) {
@@ -1602,17 +1628,29 @@ async function summarizeDocument() {
     return;
   }
 
+  const sourceText = buildDocumentSummarySource();
+  if (!sourceText.trim()) {
+    showToast("当前文档没有可总结的文本。", true);
+    return;
+  }
+
+  const cacheKey = await buildSummaryCacheKey(sourceText, detail);
+  const cached = await getCachedSummary(cacheKey).catch((error) => {
+    console.warn("Summary cache read failed", error);
+    return null;
+  });
+  if (cached?.summary) {
+    openSummary(cached.summary, detail, { cached: true, savedAt: cached.savedAt });
+    setStatus("已打开上次缓存的文献总结。");
+    showToast("已打开缓存总结，无需重新 AI 总结。");
+    return;
+  }
+
   state.summaryRunning = true;
   setBusy(true, "正在总结文献主要内容...");
   setProgress(0.08);
 
   try {
-    const sourceText = buildDocumentSummarySource();
-    if (!sourceText.trim()) {
-      showToast("当前文档没有可总结的文本。", true);
-      return;
-    }
-
     setProgress(0.24);
     const summary = await requestAiText({
       apiBase,
@@ -1625,7 +1663,17 @@ async function summarizeDocument() {
     });
 
     setProgress(1);
-    openSummary(summary.trim() || "未生成总结。", detail);
+    const cleanedSummary = cleanSummaryText(summary.trim() || "未生成总结。");
+    await putCachedSummary({
+      id: cacheKey,
+      summary: cleanedSummary,
+      detail,
+      fileName: state.file?.name || "",
+      fileSize: state.file?.size || 0,
+      segmentCount: state.segments.length,
+      savedAt: new Date().toISOString(),
+    }).catch((error) => console.warn("Summary cache write failed", error));
+    openSummary(cleanedSummary, detail, { cached: false });
     setStatus("文献总结完成。");
     showToast("文献主要内容总结完成。");
   } catch (error) {
@@ -1686,12 +1734,20 @@ function buildDocumentSummaryInstruction(detail) {
   ].join(" ");
 }
 
-function openSummary(summary, detail) {
+function openSummary(summary, detail, options = {}) {
   if (!els.summaryDialog || !els.summaryOutput) return;
-  els.summaryOutput.textContent = cleanSummaryText(summary);
+  const cleaned = cleanSummaryText(summary);
+  state.activeSummary = {
+    text: cleaned,
+    detail,
+    cached: Boolean(options.cached),
+    savedAt: options.savedAt || "",
+  };
+  els.summaryOutput.textContent = cleaned;
   if (els.summaryMeta) {
     const labels = { brief: "简要", standard: "标准", detailed: "详细" };
-    els.summaryMeta.textContent = `${getFileTypeName()} · ${state.segments.length} 段文本 · ${labels[detail] || "标准"}总结`;
+    const cacheLabel = options.cached ? " · 已缓存" : "";
+    els.summaryMeta.textContent = `${getFileTypeName()} · ${state.segments.length} 段文本 · ${labels[detail] || "标准"}总结${cacheLabel}`;
   }
   if (typeof els.summaryDialog.showModal === "function") {
     els.summaryDialog.showModal();
@@ -1726,6 +1782,86 @@ async function copySummary() {
   } catch {
     showToast("当前浏览器不允许自动复制，请手动选择文本复制。", true);
   }
+}
+
+async function shareSummary() {
+  const text = els.summaryOutput?.textContent || state.activeSummary?.text || "";
+  if (!text.trim()) return;
+  const title = `${state.file?.name || "文献"} - 主要内容总结`;
+
+  try {
+    if (navigator.share) {
+      await navigator.share({ title, text });
+      showToast("已打开系统分享面板。");
+      return;
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      showToast("已取消分享。");
+      return;
+    }
+    console.warn("Summary share failed", error);
+  }
+
+  try {
+    await navigator.clipboard.writeText(`${title}\n\n${text}`);
+    showToast("当前浏览器不支持直接分享总结，已复制到剪贴板。");
+  } catch {
+    showToast("当前浏览器不支持直接分享，请手动复制总结文本。", true);
+  }
+}
+
+async function buildSummaryCacheKey(sourceText, detail) {
+  const fingerprintSource = [
+    state.fileType || "",
+    detail || "standard",
+    sourceText,
+  ].join("\n---summary-cache---\n");
+  return `summary:${detail}:${await digestText(fingerprintSource)}`;
+}
+
+async function digestText(text) {
+  const value = String(text || "");
+  if (window.crypto?.subtle && window.TextEncoder) {
+    const bytes = new TextEncoder().encode(value);
+    const hash = await window.crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+async function getCachedSummary(id) {
+  const db = await openSummaryCacheDb();
+  return idbRequest(db, SUMMARY_CACHE_STORE, "readonly", (store) => store.get(id));
+}
+
+async function putCachedSummary(record) {
+  const db = await openSummaryCacheDb();
+  return idbRequest(db, SUMMARY_CACHE_STORE, "readwrite", (store) => store.put(record));
+}
+
+function openSummaryCacheDb() {
+  return new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) {
+      reject(new Error("IndexedDB unavailable"));
+      return;
+    }
+    const request = indexedDB.open(SUMMARY_CACHE_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(SUMMARY_CACHE_STORE)) {
+        db.createObjectStore(SUMMARY_CACHE_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
 }
 
 function queueBatchFiles(files) {
@@ -1898,6 +2034,7 @@ async function generateTranslatedFile() {
   normalizeAllTranslations();
 
   if (state.fileType === "pdf") {
+    validatePdfTranslationsBeforeExport();
     const blob = await downloadPdfTranslation();
     return { blob, filename: buildOutputName(state.file.name) };
   }
@@ -2393,6 +2530,7 @@ function updateTextarea(segment) {
 
 function updateStats() {
   const translated = state.segments.filter((segment) => segment.translation.trim()).length;
+  const hasTranslations = translated > 0;
   els.slideCount.textContent = String(state.slideCount);
   els.segmentCount.textContent = String(state.segments.length);
   els.translatedCount.textContent = String(translated);
@@ -2404,17 +2542,17 @@ function updateStats() {
   if (els.layoutPreviewButton) {
     els.layoutPreviewButton.disabled = !state.segments.length;
   }
-  els.downloadButton.disabled = !state.segments.length;
-  els.shareButton.disabled = !state.segments.length;
+  els.downloadButton.disabled = !state.segments.length || !hasTranslations;
+  els.shareButton.disabled = !state.segments.length || !hasTranslations;
   if (els.summaryButton) {
     els.summaryButton.disabled = !state.segments.length;
   }
   updateBatchButton();
   if (els.previewDownloadButton) {
-    els.previewDownloadButton.disabled = !state.segments.length;
+    els.previewDownloadButton.disabled = !state.segments.length || !hasTranslations;
   }
   if (els.previewShareButton) {
-    els.previewShareButton.disabled = !state.segments.length;
+    els.previewShareButton.disabled = !state.segments.length || !hasTranslations;
   }
   setProgress(state.segments.length ? translated / state.segments.length : 0);
 }
@@ -2438,6 +2576,7 @@ function setMobileView(view) {
 
 function setBusy(isBusy, message = "") {
   const effectiveBusy = isBusy || state.batchRunning;
+  const hasTranslations = state.segments.some((segment) => segment.translation.trim());
   updateTranslateButtonState(effectiveBusy);
   if (els.sourcePreviewButton) {
     els.sourcePreviewButton.disabled = effectiveBusy || !state.segments.length;
@@ -2446,8 +2585,8 @@ function setBusy(isBusy, message = "") {
   if (els.layoutPreviewButton) {
     els.layoutPreviewButton.disabled = effectiveBusy || !state.segments.length;
   }
-  els.downloadButton.disabled = effectiveBusy || !state.segments.length;
-  els.shareButton.disabled = effectiveBusy || !state.segments.length;
+  els.downloadButton.disabled = effectiveBusy || !state.segments.length || !hasTranslations;
+  els.shareButton.disabled = effectiveBusy || !state.segments.length || !hasTranslations;
   if (els.summaryButton) {
     els.summaryButton.disabled = effectiveBusy || !state.segments.length;
   }
@@ -2455,10 +2594,10 @@ function setBusy(isBusy, message = "") {
     els.batchTranslateButton.disabled = effectiveBusy || !state.batchFiles.length;
   }
   if (els.previewDownloadButton) {
-    els.previewDownloadButton.disabled = effectiveBusy || !state.segments.length;
+    els.previewDownloadButton.disabled = effectiveBusy || !state.segments.length || !hasTranslations;
   }
   if (els.previewShareButton) {
-    els.previewShareButton.disabled = effectiveBusy || !state.segments.length;
+    els.previewShareButton.disabled = effectiveBusy || !state.segments.length || !hasTranslations;
   }
   els.fileInput.disabled = effectiveBusy;
   document.body.classList.toggle("is-busy", effectiveBusy);
@@ -2809,7 +2948,12 @@ function getPdfExportText(segment) {
   if (!text) return "";
 
   const direction = els.translationDirection?.value || "";
-  if (getDirectionConfig(direction).targetCode === "en" && containsHanCharacters(text)) {
+  const directionConfig = getDirectionConfig(direction);
+  if (directionConfig.targetCode === "en" && containsHanCharacters(text)) {
+    return "";
+  }
+
+  if (directionConfig.targetCode === "zh" && shouldExpectHanTranslation(segment.original, directionConfig, segment) && !containsHanCharacters(text)) {
     return "";
   }
 
@@ -2822,6 +2966,61 @@ function shouldSkipSegmentForDirection(segment, direction) {
 
 function containsHanCharacters(text) {
   return /[\u3400-\u9fff]/.test(text);
+}
+
+function validatePdfTranslationsBeforeExport() {
+  if (state.fileType !== "pdf") return;
+  const direction = getDirectionConfig(els.translationDirection?.value || "");
+  if (direction.targetCode !== "zh") return;
+
+  const qualityWarning = getPdfTargetLanguageQualityWarning(direction);
+  if (qualityWarning) {
+    throw new Error(qualityWarning);
+  }
+}
+
+function getPdfTargetLanguageQualityWarning(direction = getDirectionConfig(els.translationDirection?.value || "")) {
+  if (state.fileType !== "pdf" || direction.targetCode !== "zh") return "";
+  const candidates = state.segments.filter((segment) =>
+    segment.type === "pdf" &&
+    segment.layout?.bounds &&
+    shouldExpectHanTranslation(segment.original, direction, segment)
+  );
+  if (!candidates.length) return "";
+
+  const translated = candidates.filter((segment) => String(segment.translation || "").trim());
+  const withChinese = candidates.filter((segment) => containsHanCharacters(segment.translation || ""));
+  const chineseRatio = withChinese.length / candidates.length;
+  const translatedRatio = translated.length / candidates.length;
+
+  if (withChinese.length === 0 || chineseRatio < 0.45 || translatedRatio < 0.75) {
+    return `PDF 英文转中文尚未生成足够中文译文（${withChinese.length}/${candidates.length} 段含中文）。请确认翻译语种为“英文 → 中文”，重新点击“自动翻译”完成后再导出。`;
+  }
+
+  return "";
+}
+
+function shouldRetryTranslationForTarget(translation, source, direction, segment = null) {
+  if (direction?.targetCode !== "zh") return false;
+  if (!shouldExpectHanTranslation(source, direction, segment)) return false;
+  if (containsHanCharacters(translation || "")) return false;
+  return true;
+}
+
+function shouldExpectHanTranslation(source, direction, segment = null) {
+  if (direction?.targetCode !== "zh") return false;
+  const text = String(source || "").trim();
+  if (!text || containsHanCharacters(text)) return false;
+  const letters = text.match(/[A-Za-z]+/g) || [];
+  if (!letters.length) return false;
+  const words = letters.filter((word) => word.length > 1);
+  const letterCount = letters.join("").length;
+  const hasSentenceShape = /[.!?;:,)]/.test(text) || words.length >= 4 || [...text].length >= 28;
+  const mostlyReferenceNoise = /^\s*(?:\[\d+\]|\(?\d+\)?|[-–—\d\s.,;:()[\]/]+|[A-Z]{1,6})+\s*$/.test(text);
+  const mostlyAcronyms = words.length <= 3 && words.every((word) => /^[A-Z]{2,8}$/.test(word));
+  const tooShortPdfLabel = segment?.type === "pdf" && [...text].length < 18 && words.length <= 2;
+
+  return letterCount >= 8 && hasSentenceShape && !mostlyReferenceNoise && !mostlyAcronyms && !tooShortPdfLabel;
 }
 
 function drawPdfTableCellBorders(page, cells, rgb) {
@@ -3465,6 +3664,7 @@ async function resetApp(clearInput = true, options = {}) {
   state.pdfTableCells = new Map();
   state.pdfBytes = null;
   state.batchFiles = [];
+  state.activeSummary = null;
   if (clearInput) els.fileInput.value = "";
   els.fileMeta.textContent = "支持 PPTX / DOCX / PDF；旧版 PPT/DOC 请先另存";
   closePreview();
@@ -4625,6 +4825,20 @@ function getDirectionConfig(value) {
 function buildSegmentTranslationInstruction(direction, segment, mode = "translate") {
   const extras = [];
 
+  if (segment?.type === "pdf" || segment?.type === "docx") {
+    extras.push([
+      segment.type === "pdf"
+        ? "This source is extracted from a PDF article or document, sometimes as a paragraph, caption, table cell, reference entry, or figure label."
+        : "This source is extracted from a Word document paragraph, header, footer, table cell, or list item.",
+      direction.targetCode === "zh"
+        ? "Translate meaningful English sentences and phrases into natural Simplified Chinese. The output for ordinary English prose must contain Simplified Chinese characters."
+        : "Translate ordinary prose naturally into the target language.",
+      "Keep technical acronyms, gene/protein names, chemical symbols, formulas, reference numbers, author names, journal names, and units unchanged when they are standard terms.",
+      "If the source is only an acronym, citation number, equation, or isolated symbol, return it unchanged.",
+      "Do not summarize, omit, explain, or add markdown.",
+    ].join(" "));
+  }
+
   if (segment?.type === "pptx") {
     const targetIsEnglish = direction.targetCode === "en";
     const isSingleLine = shouldUseSingleLine(segment);
@@ -4703,6 +4917,23 @@ function buildSegmentTranslationInstruction(direction, segment, mode = "translat
   }
 
   return [direction.instruction, ...extras].filter(Boolean).join(" ");
+}
+
+function buildTargetEnforcementInstruction(direction, segment = null) {
+  const base = buildSegmentTranslationInstruction(direction, segment, "translate");
+  if (direction?.targetCode === "zh") {
+    return [
+      base,
+      "The previous output did not satisfy the target language requirement.",
+      "Translate the provided English source into Simplified Chinese now.",
+      "For meaningful English prose, the answer must contain Simplified Chinese characters.",
+      "Return only the corrected translation.",
+    ].join(" ");
+  }
+  return [
+    base,
+    "The previous output did not satisfy the target language requirement. Return only the corrected translation.",
+  ].join(" ");
 }
 
 function getPptTranslationLengthBudget(segment) {

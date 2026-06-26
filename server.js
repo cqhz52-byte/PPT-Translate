@@ -110,11 +110,13 @@ async function handleTranslate(req, res) {
 
 function buildTranslationSystemPrompt(instruction) {
   return [
-    "You are a professional PowerPoint and Word document translator.",
+    "You are a professional document translator for PDF, Word, and PowerPoint files.",
     instruction,
     "Keep numbers, units, product names, formulas, punctuation intent, dates, and years exactly accurate.",
     "For document layout safety, keep the translation compact and close to the source length.",
     "If the source is short, fragmented, or appears to be a table cell, translate it literally and compactly.",
+    "If the requested target is Simplified Chinese, meaningful English prose must be translated into Simplified Chinese and the output must contain Chinese characters.",
+    "For PDF articles, do not treat normal paragraphs as slide labels; translate the sentence meaning naturally while preserving acronyms and citation numbers.",
     "Never say you cannot translate, never ask for source text, and never return apology or explanation text.",
     "For titles, section labels, table-of-contents entries, and short phrases, use short noun phrases instead of full sentences.",
     "Do not add line breaks unless the source text clearly contains line breaks.",

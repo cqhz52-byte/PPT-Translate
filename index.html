@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=74">
+    <link rel="stylesheet" href="styles.css?v=75">
   </head>
   <body>
     <main class="shell">
@@ -17,7 +17,7 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="CuraWay">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v74 · 待翻译文献预览</p>
+            <p class="version">v75 · PDF 中文校验与总结缓存</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -241,6 +241,7 @@
             <p id="summaryMeta">按当前载入文档生成。</p>
           </div>
           <div class="preview-actions">
+            <button id="summaryShareButton" type="button">分享</button>
             <button id="summaryCopyButton" type="button">复制</button>
             <button class="icon-button" id="summaryCloseButton" type="button" title="关闭总结" aria-label="关闭总结">
               <span aria-hidden="true">×</span>
@@ -300,6 +301,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=74" type="module"></script>
+    <script src="app.js?v=75" type="module"></script>
   </body>
 </html>
