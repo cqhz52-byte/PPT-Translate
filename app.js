@@ -14,6 +14,7 @@ const state = {
   batchCancelRequested: false,
   translationRunning: false,
   translationAbortController: null,
+  summaryRunning: false,
   savedFiles: [],
   installPrompt: null,
   wakeLock: null,
@@ -40,6 +41,18 @@ const els = {
   layoutPreviewButton: document.querySelector("#layoutPreviewButton"),
   downloadButton: document.querySelector("#downloadButton"),
   shareButton: document.querySelector("#shareButton"),
+  summaryButton: document.querySelector("#summaryButton"),
+  summaryDetail: document.querySelector("#summaryDetail"),
+  summaryDialog: document.querySelector("#summaryDialog"),
+  summaryCloseButton: document.querySelector("#summaryCloseButton"),
+  summaryCopyButton: document.querySelector("#summaryCopyButton"),
+  summaryMeta: document.querySelector("#summaryMeta"),
+  summaryOutput: document.querySelector("#summaryOutput"),
+  miniModeButton: document.querySelector("#miniModeButton"),
+  miniWorkspace: document.querySelector("#miniWorkspace"),
+  miniStatus: document.querySelector("#miniStatus"),
+  miniProgressFill: document.querySelector("#miniProgressFill"),
+  miniExitButton: document.querySelector("#miniExitButton"),
   resetButton: document.querySelector("#resetButton"),
   helpButton: document.querySelector("#helpButton"),
   helpDialog: document.querySelector("#helpDialog"),
@@ -85,7 +98,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v67";
+const APP_VERSION = "v68";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -120,7 +133,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=67").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=68").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -425,6 +438,14 @@ els.translateButton.addEventListener("click", handleTranslateButtonClick);
 els.batchTranslateButton?.addEventListener("click", processBatchQueue);
 els.previewButton.addEventListener("click", openPreview);
 els.layoutPreviewButton?.addEventListener("click", openPreview);
+els.summaryButton?.addEventListener("click", summarizeDocument);
+els.summaryCloseButton?.addEventListener("click", closeSummary);
+els.summaryCopyButton?.addEventListener("click", copySummary);
+els.summaryDialog?.addEventListener("click", (event) => {
+  if (event.target === els.summaryDialog) closeSummary();
+});
+els.miniModeButton?.addEventListener("click", enableMiniMode);
+els.miniExitButton?.addEventListener("click", disableMiniMode);
 els.downloadButton.addEventListener("click", downloadPresentation);
 els.shareButton.addEventListener("click", sharePresentation);
 els.resetButton.addEventListener("click", handleResetButtonClick);
@@ -444,6 +465,7 @@ els.helpDialog?.addEventListener("click", (event) => {
   els.translationDirection,
   els.pptLayoutMode,
   els.fontScale,
+  els.summaryDetail,
   els.modelName,
   els.apiKey,
 ].forEach((element) => {
@@ -1530,6 +1552,21 @@ function getTranslationConcurrency() {
 }
 
 async function translateText({ apiBase, apiProxy, apiKey, model, direction, segment = null, text, mode = "translate", signal }) {
+  const result = await requestAiText({
+    apiBase,
+    apiProxy,
+    apiKey,
+    model,
+    instruction: buildSegmentTranslationInstruction(direction, segment, mode),
+    text,
+    task: "translate",
+    signal,
+  });
+
+  return normalizeTranslation(result, text, segment);
+}
+
+async function requestAiText({ apiBase, apiProxy, apiKey, model, instruction, text, task = "translate", signal }) {
   const response = await fetch(apiProxy, {
     method: "POST",
     headers: {
@@ -1540,7 +1577,8 @@ async function translateText({ apiBase, apiProxy, apiKey, model, direction, segm
       apiBase,
       apiKey,
       model,
-      instruction: buildSegmentTranslationInstruction(direction, segment, mode),
+      task,
+      instruction,
       text,
     }),
   });
@@ -1551,7 +1589,139 @@ async function translateText({ apiBase, apiProxy, apiKey, model, direction, segm
   }
 
   const data = await response.json();
-  return normalizeTranslation(data.translation || "", text, segment);
+  return data.translation || "";
+}
+
+async function summarizeDocument() {
+  if (state.summaryRunning || !state.segments.length) return;
+
+  const apiKey = els.apiKey.value.trim();
+  const apiBase = DEEPSEEK_API_BASE;
+  const apiProxy = TRANSLATE_PROXY;
+  const model = els.modelName.value.trim();
+  const detail = els.summaryDetail?.value || "standard";
+
+  if (!model) {
+    showToast("请先填写模型。API Key 可留空使用 Cloudflare 后端配置。", true);
+    return;
+  }
+
+  state.summaryRunning = true;
+  setBusy(true, "正在总结文献主要内容...");
+  setProgress(0.08);
+
+  try {
+    const sourceText = buildDocumentSummarySource();
+    if (!sourceText.trim()) {
+      showToast("当前文档没有可总结的文本。", true);
+      return;
+    }
+
+    setProgress(0.24);
+    const summary = await requestAiText({
+      apiBase,
+      apiProxy,
+      apiKey,
+      model,
+      task: "summary",
+      instruction: buildDocumentSummaryInstruction(detail),
+      text: sourceText,
+    });
+
+    setProgress(1);
+    openSummary(summary.trim() || "未生成总结。", detail);
+    setStatus("文献总结完成。");
+    showToast("文献主要内容总结完成。");
+  } catch (error) {
+    showToast(error.message || "文献总结失败。", true);
+    setStatus("文献总结失败，请检查接口配置或网络连接。");
+  } finally {
+    state.summaryRunning = false;
+    setBusy(false);
+  }
+}
+
+function buildDocumentSummarySource() {
+  const chunks = state.segments
+    .map((segment) => {
+      const label = segment.locationLabel || `第 ${segment.slideNumber || ""} 页`;
+      const text = String(segment.original || "").replace(/\s+/g, " ").trim();
+      return text ? `[${label}] ${text}` : "";
+    })
+    .filter(Boolean);
+
+  return trimDocumentForSummary(chunks.join("\n"));
+}
+
+function trimDocumentForSummary(text) {
+  const normalized = String(text || "").replace(/\n{3,}/g, "\n\n").trim();
+  const maxCharacters = 42000;
+  if ([...normalized].length <= maxCharacters) return normalized;
+
+  const chars = [...normalized];
+  const headLength = Math.floor(maxCharacters * 0.42);
+  const middleLength = Math.floor(maxCharacters * 0.22);
+  const tailLength = maxCharacters - headLength - middleLength;
+  const middleStart = Math.max(headLength, Math.floor((chars.length - middleLength) / 2));
+  return [
+    chars.slice(0, headLength).join(""),
+    "\n\n[中间内容节选]\n",
+    chars.slice(middleStart, middleStart + middleLength).join(""),
+    "\n\n[末尾内容节选]\n",
+    chars.slice(-tailLength).join(""),
+  ].join("");
+}
+
+function buildDocumentSummaryInstruction(detail) {
+  const detailMap = {
+    brief: "输出简要总结，约 5-8 条要点，重点说明主题、目的、核心结论和适用场景。",
+    standard: "输出标准结构化总结，包含：一句话概述、背景/目的、主要方法或结构、关键发现/主张、重要数据/术语、应用价值、注意事项。",
+    detailed: "输出详细总结，包含：一句话概述、文献结构、逐部分要点、关键术语解释、主要数据/专利权利要求或技术方案、创新点、局限/风险、可执行建议。必要时使用小标题和项目符号。",
+  };
+
+  return [
+    "你是严谨的文献阅读助手，请用简体中文总结用户提供的 PDF、Word 或 PPT 文档主要内容。",
+    detailMap[detail] || detailMap.standard,
+    "保留关键数字、年份、专利号、产品名、机构名、术语缩写和单位。",
+    "如果来源是专利，请重点提炼技术问题、解决方案、系统/方法构成、核心权利要求、应用场景和潜在价值。",
+    "如果来源是论文或报告，请重点提炼研究目的、方法、结果、结论和局限。",
+    "不要编造未出现的信息；不确定时标注“原文未明确”。",
+    "直接输出总结正文，不要说你无法访问文件。",
+  ].join(" ");
+}
+
+function openSummary(summary, detail) {
+  if (!els.summaryDialog || !els.summaryOutput) return;
+  els.summaryOutput.textContent = summary;
+  if (els.summaryMeta) {
+    const labels = { brief: "简要", standard: "标准", detailed: "详细" };
+    els.summaryMeta.textContent = `${getFileTypeName()} · ${state.segments.length} 段文本 · ${labels[detail] || "标准"}总结`;
+  }
+  if (typeof els.summaryDialog.showModal === "function") {
+    els.summaryDialog.showModal();
+  } else {
+    els.summaryDialog.setAttribute("open", "");
+  }
+}
+
+function closeSummary() {
+  if (!els.summaryDialog) return;
+  if (typeof els.summaryDialog.close === "function") {
+    els.summaryDialog.close();
+  } else {
+    els.summaryDialog.removeAttribute("open");
+  }
+}
+
+async function copySummary() {
+  const text = els.summaryOutput?.textContent || "";
+  if (!text.trim()) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("总结已复制。");
+  } catch {
+    showToast("当前浏览器不允许自动复制，请手动选择文本复制。", true);
+  }
 }
 
 function queueBatchFiles(files) {
@@ -2230,6 +2400,9 @@ function updateStats() {
   }
   els.downloadButton.disabled = !state.segments.length;
   els.shareButton.disabled = !state.segments.length;
+  if (els.summaryButton) {
+    els.summaryButton.disabled = !state.segments.length;
+  }
   updateBatchButton();
   if (els.previewDownloadButton) {
     els.previewDownloadButton.disabled = !state.segments.length;
@@ -2257,6 +2430,17 @@ function setMobileView(view) {
   });
 }
 
+function enableMiniMode() {
+  document.body.classList.add("mini-mode");
+  if (els.miniWorkspace) els.miniWorkspace.hidden = false;
+  showToast("已切换为迷你工作窗。手机切到其他 App 后，系统仍可能暂停网页任务。");
+}
+
+function disableMiniMode() {
+  document.body.classList.remove("mini-mode");
+  if (els.miniWorkspace) els.miniWorkspace.hidden = true;
+}
+
 function setBusy(isBusy, message = "") {
   const effectiveBusy = isBusy || state.batchRunning;
   updateTranslateButtonState(effectiveBusy);
@@ -2266,6 +2450,9 @@ function setBusy(isBusy, message = "") {
   }
   els.downloadButton.disabled = effectiveBusy || !state.segments.length;
   els.shareButton.disabled = effectiveBusy || !state.segments.length;
+  if (els.summaryButton) {
+    els.summaryButton.disabled = effectiveBusy || !state.segments.length;
+  }
   if (els.batchTranslateButton) {
     els.batchTranslateButton.disabled = effectiveBusy || !state.batchFiles.length;
   }
@@ -3060,6 +3247,7 @@ function groupSegmentsForPreview() {
 
 function setStatus(message) {
   els.statusText.textContent = message;
+  if (els.miniStatus) els.miniStatus.textContent = message || "空闲";
 }
 
 function setProgress(value) {
@@ -3067,6 +3255,9 @@ function setProgress(value) {
   els.progressFill.style.width = `${percent}%`;
   els.progressFill.style.setProperty("--progress-percent", `${percent}%`);
   els.statusVisual?.style.setProperty("--progress-deg", `${Math.round(percent * 3.6)}deg`);
+  if (els.miniProgressFill) {
+    els.miniProgressFill.style.width = `${percent}%`;
+  }
 }
 
 function waitForUiFrame() {
@@ -4123,6 +4314,7 @@ function loadSettings() {
     setElementValue(els.translationDirection, settings.translationDirection);
     setElementValue(els.pptLayoutMode, settings.pptLayoutMode);
     setElementValue(els.fontScale, settings.fontScale);
+    setElementValue(els.summaryDetail, settings.summaryDetail);
     setElementValue(els.modelName, settings.modelName);
     setElementValue(els.apiKey, settings.apiKey);
     updateFontScaleLabel();
@@ -4137,6 +4329,7 @@ function saveSettings() {
     translationDirection: els.translationDirection?.value || "",
     pptLayoutMode: els.pptLayoutMode?.value || "",
     fontScale: els.fontScale?.value || "100",
+    summaryDetail: els.summaryDetail?.value || "standard",
     modelName: els.modelName?.value || "",
     apiKey: els.apiKey?.value || "",
   };

@@ -880,7 +880,8 @@ td:first-child {
 }
 
 .preview-dialog,
-.help-dialog {
+.help-dialog,
+.summary-dialog {
   width: min(1120px, calc(100vw - 28px));
   max-height: min(860px, calc(100vh - 28px));
   padding: 0;
@@ -895,20 +896,27 @@ td:first-child {
   width: min(780px, calc(100vw - 28px));
 }
 
+.summary-dialog {
+  width: min(880px, calc(100vw - 28px));
+}
+
 .preview-dialog::backdrop,
-.help-dialog::backdrop {
+.help-dialog::backdrop,
+.summary-dialog::backdrop {
   background: rgba(15, 25, 23, 0.38);
 }
 
 .preview-shell,
-.help-shell {
+.help-shell,
+.summary-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   max-height: inherit;
 }
 
 .preview-head,
-.help-head {
+.help-head,
+.summary-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -918,7 +926,8 @@ td:first-child {
 }
 
 .preview-head p:last-child,
-.help-head p:last-child {
+.help-head p:last-child,
+.summary-head p:last-child {
   margin: 6px 0 0;
   color: var(--muted);
 }
@@ -943,6 +952,71 @@ td:first-child {
   padding: 18px;
   overflow: auto;
   background: #f9fbfa;
+}
+
+.summary-body {
+  padding: 18px;
+  overflow: auto;
+  background: #f9fbfa;
+}
+
+.summary-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.mini-workspace {
+  position: fixed;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  z-index: 110;
+  display: grid;
+  gap: 8px;
+  width: min(320px, calc(100vw - 28px));
+  padding: 12px;
+  border: 1px solid rgba(22, 90, 114, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+}
+
+.mini-workspace strong {
+  color: var(--accent);
+  font-size: 14px;
+}
+
+.mini-workspace span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mini-progress {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.mini-progress span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.mini-workspace button {
+  min-height: 34px;
+}
+
+.mini-mode .shell {
+  max-height: 48vh;
+  overflow: auto;
 }
 
 .help-body section {
@@ -1385,7 +1459,8 @@ td:first-child {
   }
 
   .preview-dialog,
-  .help-dialog {
+  .help-dialog,
+  .summary-dialog {
     width: min(100%, calc(100dvw - 16px));
     max-width: calc(100dvw - 16px);
     max-height: calc(100dvh - 16px);
@@ -1395,7 +1470,9 @@ td:first-child {
   .preview-head,
   .preview-body,
   .help-head,
-  .help-body {
+  .help-body,
+  .summary-head,
+  .summary-body {
     padding: 14px;
   }
 
@@ -1445,8 +1522,15 @@ td:first-child {
   }
 
   .preview-head,
-  .help-head {
+  .help-head,
+  .summary-head {
     flex-direction: column;
     gap: 10px;
+  }
+
+  .mini-workspace {
+    right: 10px;
+    bottom: 10px;
+    width: calc(100vw - 20px);
   }
 }
