@@ -85,7 +85,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v64";
+const APP_VERSION = "v65";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -93,9 +93,18 @@ const DEEPSEEK_API_BASE = "https://api.deepseek.com";
 const TRANSLATE_PROXY = "./api/translate";
 const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
-const PDFLIB_URL = "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm";
-const FONTKIT_URL = "https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/+esm";
-const PDF_FONT_URL = "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf";
+const PDFLIB_URLS = [
+  "./vendor/pdf-lib.esm.min.js",
+  "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm",
+];
+const FONTKIT_URLS = [
+  "./vendor/fontkit.bundle.js",
+  "https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/+esm",
+];
+const PDF_FONT_URLS = [
+  "./vendor/fonts/NotoSansCJKsc-Regular.otf",
+  "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+];
 const parser = new DOMParser();
 const serializer = new XMLSerializer();
 let draftSaveTimer = 0;
@@ -111,7 +120,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=64").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=65").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -2316,11 +2325,18 @@ async function downloadPdfTranslation() {
   await waitForUiFrame();
   const font = await pdfDoc.embedFont(fontBytes, { subset: true });
   const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.layout?.bounds);
+  const overlayPlans = [];
 
   for (let index = 0; index < translatedSegments.length; index += 1) {
     const segment = translatedSegments[index];
     const page = pages[Number(segment.slideNumber) - 1];
-    if (page) drawPdfOverlayTranslation(page, segment, font, rgb);
+    if (page) {
+      const plan = createPdfOverlayPlan(segment, font);
+      if (plan) {
+        drawPdfOverlayErase(page, plan, rgb);
+        overlayPlans.push({ page, plan });
+      }
+    }
 
     if (index % 12 === 0 || index === translatedSegments.length - 1) {
       const ratio = translatedSegments.length ? (index + 1) / translatedSegments.length : 1;
@@ -2329,6 +2345,8 @@ async function downloadPdfTranslation() {
       await waitForUiFrame();
     }
   }
+
+  overlayPlans.forEach(({ page, plan }) => drawPdfOverlayText(page, plan, font, rgb));
 
   setProgress(0.9);
   setStatus("正在保存翻译版 PDF，文件较大时可能需要几十秒...");
@@ -2352,11 +2370,14 @@ async function downloadPdfTranslation() {
   return blob;
 }
 
-function drawPdfOverlayTranslation(page, segment, font, rgb) {
+function createPdfOverlayPlan(segment, font) {
   const sourceBounds = segment.layout.bounds;
   const cell = segment.layout.tableCell;
   const direction = getDirectionConfig(els.translationDirection?.value || "");
-  if (shouldSkipSegmentForDirection(segment, direction)) return;
+  if (shouldSkipSegmentForDirection(segment, direction)) return null;
+
+  const text = getPdfExportText(segment);
+  if (!text) return null;
 
   const fitBounds = cell
     ? { x: cell.x + 2, y: cell.y + 2, width: Math.max(4, cell.width - 4), height: Math.max(4, cell.height - 4) }
@@ -2382,36 +2403,59 @@ function drawPdfOverlayTranslation(page, segment, font, rgb) {
   const coverColor = segment.layout.backgroundColor || { r: 1, g: 1, b: 1 };
   const textColor = segment.layout.textColor || getReadablePdfTextColor(coverColor);
 
-  page.drawRectangle({
-    x: eraseX,
-    y: eraseY,
-    width: eraseWidth,
-    height: eraseHeight,
-    color: rgb(coverColor.r, coverColor.g, coverColor.b),
-    opacity: 1,
-  });
-
-  const text = getPdfExportText(segment);
-  if (!text) return;
-
   const fit = fitPdfTextSize(text, font, fitBounds, segment.layout.fontSize || 10, segment.original, segment.layout);
   const fontSize = fit.fontSize;
   const lines = fit.lines;
   const lineHeight = fit.lineHeight;
-  const textHeight = lines.length * lineHeight;
+  const textHeight = getPdfTextBlockHeight(lines, fontSize, lineHeight);
   const fitY = isTableLike ? Math.max(0, sourceBounds.y - Math.max(0, (fitBounds.height - sourceBounds.height) / 2)) : sourceBounds.y;
-  let y = fitY + Math.max(0, (fitBounds.height - textHeight) / 2) + (lines.length - 1) * lineHeight;
-  lines.forEach((line) => {
+  const baselineOffset = getPdfBaselineOffset(fontSize);
+  let y = fitY + Math.max(0, (fitBounds.height - textHeight) / 2) + baselineOffset + (lines.length - 1) * lineHeight;
+
+  return {
+    erase: {
+      x: eraseX,
+      y: eraseY,
+      width: eraseWidth,
+      height: eraseHeight,
+      color: coverColor,
+    },
+    fitBounds,
+    lines,
+    fontSize,
+    lineHeight,
+    textColor,
+    cellAlign: segment.layout.cellAlign,
+    y,
+  };
+}
+
+function drawPdfOverlayErase(page, plan, rgb) {
+  page.drawRectangle({
+    x: plan.erase.x,
+    y: plan.erase.y,
+    width: plan.erase.width,
+    height: plan.erase.height,
+    color: rgb(plan.erase.color.r, plan.erase.color.g, plan.erase.color.b),
+    opacity: 1,
+  });
+}
+
+function drawPdfOverlayText(page, plan, font, rgb) {
+  let y = plan.y;
+
+  plan.lines.forEach((line) => {
+    const fontSize = plan.fontSize;
     const lineWidth = font.widthOfTextAtSize(line, fontSize);
-    const x = segment.layout.cellAlign === "center" ? fitBounds.x + Math.max(0, (fitBounds.width - lineWidth) / 2) : fitBounds.x;
+    const x = plan.cellAlign === "center" ? plan.fitBounds.x + Math.max(0, (plan.fitBounds.width - lineWidth) / 2) : plan.fitBounds.x;
     page.drawText(line, {
       x,
       y,
       size: fontSize,
       font,
-      color: rgb(textColor.r, textColor.g, textColor.b),
+      color: rgb(plan.textColor.r, plan.textColor.g, plan.textColor.b),
     });
-    y -= lineHeight;
+    y -= plan.lineHeight;
   });
 }
 
@@ -2471,61 +2515,59 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout 
   const isTableLike = Number(layout?.rowSegmentCount || 1) > 1;
   const preferred = sourceFontSize;
   const targetWidth = Math.max(4, bounds.width);
-  const maxHeight = Math.max(5, bounds.height * (isTableLike ? 1.12 : 1.55));
-
-  if (!isTableLike) {
-    const lineHeight = getPdfLineHeight(preferred, false);
-    const lines = wrapPdfText(text, font, preferred, targetWidth);
-    return { fontSize: preferred, lines, lineHeight };
-  }
-
-  const minSize = Math.max(4.8, preferred * 0.72);
+  const maxHeight = Math.max(5, bounds.height * (isTableLike ? 0.9 : 0.96));
+  const minSize = Math.max(4.2, preferred * (isTableLike ? 0.64 : 0.58));
 
   const textWidthAtPreferred = Math.max(0.1, font.widthOfTextAtSize(text, preferred));
   const estimatedSize = Math.min(preferred, (preferred * targetWidth) / textWidthAtPreferred);
 
   for (let size = preferred; size >= minSize; size -= 0.25) {
-    const lineHeight = getPdfLineHeight(size, true);
+    const lineHeight = getPdfLineHeight(size, isTableLike);
     const lines = wrapPdfText(text, font, size, targetWidth);
-    if (lines.length * lineHeight <= maxHeight) {
+    if (getPdfTextBlockHeight(lines, size, lineHeight) <= maxHeight) {
       return { fontSize: size, lines, lineHeight };
     }
   }
 
   for (let size = estimatedSize; size >= minSize; size -= 0.25) {
-    const lineHeight = getPdfLineHeight(size, true);
+    const lineHeight = getPdfLineHeight(size, isTableLike);
     const lines = wrapPdfText(text, font, size, targetWidth);
-    if (lines.length * lineHeight <= maxHeight) {
+    if (getPdfTextBlockHeight(lines, size, lineHeight) <= maxHeight) {
       return { fontSize: size, lines, lineHeight };
     }
   }
 
   for (let size = minSize; size >= 3.6; size -= 0.2) {
-    const lineHeight = getPdfLineHeight(size, true);
+    const lineHeight = getPdfLineHeight(size, isTableLike);
     const lines = wrapPdfText(text, font, size, targetWidth);
-    if (lines.length * lineHeight <= maxHeight) {
+    if (getPdfTextBlockHeight(lines, size, lineHeight) <= maxHeight) {
       return { fontSize: size, lines, lineHeight };
     }
   }
 
-  return { fontSize: minSize, lines: [text], lineHeight: getPdfLineHeight(minSize, true) };
+  return { fontSize: minSize, lines: wrapPdfText(text, font, minSize, targetWidth), lineHeight: getPdfLineHeight(minSize, isTableLike) };
 }
 
 function getPdfLineHeight(size, isTableLike) {
-  return size * (isTableLike ? 1.18 : 1.28);
+  return size * (isTableLike ? 1.28 : 1.36);
+}
+
+function getPdfBaselineOffset(fontSize) {
+  return Math.max(0.8, fontSize * 0.22);
+}
+
+function getPdfTextBlockHeight(lines, fontSize, lineHeight) {
+  if (!lines.length) return 0;
+  return (lines.length - 1) * lineHeight + fontSize + getPdfBaselineOffset(fontSize);
 }
 
 async function loadPdfExportTools() {
   if (!window.pdfLibTools) {
     const [pdfLib, fontkitModule, fontResponse] = await Promise.all([
-      import(PDFLIB_URL),
-      import(FONTKIT_URL),
-      fetch(PDF_FONT_URL),
+      importFirstAvailable(PDFLIB_URLS, "PDF 导出库"),
+      importFirstAvailable(FONTKIT_URLS, "PDF 中文字体引擎"),
+      fetchFirstAvailable(PDF_FONT_URLS, "PDF 中文字体"),
     ]);
-
-    if (!fontResponse.ok) {
-      throw new Error(`PDF 字体加载失败：${fontResponse.status}`);
-    }
 
     window.pdfLibTools = {
       PDFDocument: pdfLib.PDFDocument,
@@ -2536,6 +2578,39 @@ async function loadPdfExportTools() {
   }
 
   return window.pdfLibTools;
+}
+
+async function importFirstAvailable(urls, label) {
+  let lastError = null;
+
+  for (const url of urls) {
+    try {
+      return await import(url);
+    } catch (error) {
+      lastError = error;
+      console.warn(`${label} 加载失败，尝试备用地址：${url}`, error);
+    }
+  }
+
+  throw new Error(`${label} 加载失败：${lastError?.message || "请检查网络或刷新更新 app"}`);
+}
+
+async function fetchFirstAvailable(urls, label) {
+  let lastError = null;
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return response;
+      lastError = new Error(`HTTP ${response.status}`);
+      console.warn(`${label} 加载失败，尝试备用地址：${url}`, lastError);
+    } catch (error) {
+      lastError = error;
+      console.warn(`${label} 加载失败，尝试备用地址：${url}`, error);
+    }
+  }
+
+  throw new Error(`${label} 加载失败：${lastError?.message || "请检查网络或刷新更新 app"}`);
 }
 
 function wrapPdfText(text, font, fontSize, maxWidth) {
