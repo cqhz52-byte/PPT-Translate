@@ -1033,9 +1033,32 @@ td:first-child {
   min-height: 34px;
 }
 
+body.mini-mode {
+  overflow: hidden;
+}
+
 .mini-mode .shell {
-  max-height: 48vh;
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 108px);
+  z-index: 108;
+  width: 900px;
+  max-width: none;
+  height: 1450px;
+  max-height: none;
+  padding: 22px;
   overflow: auto;
+  border: 1px solid rgba(22, 90, 114, 0.22);
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: 0 24px 70px rgba(20, 35, 32, 0.26);
+  pointer-events: none;
+  transform: scale(0.32);
+  transform-origin: right bottom;
+}
+
+.mini-mode .toast {
+  z-index: 125;
 }
 
 .help-body section {
@@ -1587,5 +1610,11 @@ td:first-child {
     right: 10px;
     bottom: 10px;
     width: calc(100vw - 20px);
+  }
+
+  .mini-mode .shell {
+    right: 10px;
+    bottom: 118px;
+    transform: scale(0.3);
   }
 }
