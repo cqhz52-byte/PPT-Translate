@@ -1,4 +1,4 @@
 {
-  "version": "v85",
-  "message": "发现新版本 v85：保护 PDF 参考文献条目，避免引用列表被翻译后挤压重叠。"
+  "version": "v86",
+  "message": "发现新版本 v86：修复原始 PDF/PPTX/DOCX 预览，PDF 改为逐页渲染，PPTX/DOCX 改为浏览器内可核对的原文预览。"
 }
