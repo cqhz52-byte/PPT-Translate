@@ -93,7 +93,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v72";
+const APP_VERSION = "v73";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -128,7 +128,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=72").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=73").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -1699,6 +1699,7 @@ function openSummary(summary, detail) {
 function cleanSummaryText(text) {
   return String(text || "")
     .replace(/\*+/g, "")
+    .replace(/#+/g, "")
     .replace(/[ \t]+\n/g, "\n")
     .trim();
 }

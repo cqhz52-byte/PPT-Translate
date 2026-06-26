@@ -333,9 +333,17 @@ h2 {
   word-break: break-word;
 }
 
-.settings {
+.settings,
+.translation-panel {
   display: grid;
   gap: 12px;
+}
+
+.translation-panel {
+  padding: 14px;
+  border: 1px solid rgba(22, 90, 114, 0.14);
+  border-radius: 8px;
+  background: rgba(228, 240, 243, 0.56);
 }
 
 label {
@@ -1298,6 +1306,7 @@ td:first-child {
 
   .upload-zone,
   .settings,
+  .translation-panel,
   .actions,
   .saved-files,
   .stats {
