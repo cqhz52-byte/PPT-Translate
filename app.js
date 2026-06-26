@@ -1897,11 +1897,7 @@ function compactPresentationTextBoxGroups(paragraphs, segments) {
 
     bodySegments.slice(1).forEach((segment) => {
       const paragraph = paragraphs[segment.paragraphIndex];
-      const textNodes = [...(paragraph?.getElementsByTagNameNS(DRAWING_NS, "t") || [])];
-      if (textNodes.length) {
-        textNodes[0].textContent = "";
-        clearRemainingTextNodes(textNodes);
-      }
+      paragraph?.parentNode?.removeChild(paragraph);
     });
 
     ordered.forEach((segment) => compacted.add(segment));
