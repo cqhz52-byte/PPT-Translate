@@ -1,11 +1,11 @@
-const CACHE_NAME = "ppt-translator-pwa-v69";
+const CACHE_NAME = "ppt-translator-pwa-v70";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
-  "./styles.css?v=69",
+  "./styles.css?v=70",
   "./app.js",
-  "./app.js?v=69",
+  "./app.js?v=70",
   "./version.json",
   "./assets/curaway-logo.png",
   "./manifest.webmanifest",

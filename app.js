@@ -86,7 +86,7 @@ const els = {
 };
 
 const slidePathPattern = /^ppt\/slides\/slide(\d+)\.xml$/;
-const wordPathPattern = /^word\/(?:document|header\d+|footnotes|endnotes|comments)\.xml$/;
+const wordPathPattern = /^word\/(?:document|header\d+|footer\d+|footnotes|endnotes|comments)\.xml$/;
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const PPT_EMU_PER_PT = 12700;
@@ -98,7 +98,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v69";
+const APP_VERSION = "v70";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -133,7 +133,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=69").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=70").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -1209,11 +1209,10 @@ async function loadWordDocument() {
     const partLabel = getWordPartLabel(path);
     const paragraphs = [...doc.getElementsByTagNameNS(WORD_NS, "p")];
     paragraphs.forEach((paragraph, paragraphIndex) => {
-      if (hasWordField(paragraph)) return;
       const textNodes = [...paragraph.getElementsByTagNameNS(WORD_NS, "t")];
       const rawOriginal = textNodes.map((node) => node.textContent || "").join("");
       const original = rawOriginal.trim();
-      if (!original) return;
+      if (shouldSkipWordParagraph(original)) return;
       const leadingWhitespace = rawOriginal.match(/^\s*/)?.[0] || "";
       const trailingWhitespace = rawOriginal.match(/\s*$/)?.[0] || "";
       const syntheticAlignment = detectWordSyntheticAlignment(path, paragraph, original, leadingWhitespace, trailingWhitespace);
@@ -2174,7 +2173,6 @@ function writeWordSegments(doc, segments) {
   segments.forEach((segment) => {
     const paragraph = paragraphs[segment.paragraphIndex];
     if (!paragraph || !segment.translation.trim()) return;
-    if (hasWordField(paragraph)) return;
 
     const textNodes = [...paragraph.getElementsByTagNameNS(WORD_NS, "t")];
     if (!textNodes.length) return;
@@ -2370,10 +2368,10 @@ function updateWordTextSpacePreserve(textNode) {
   }
 }
 
-function hasWordField(paragraph) {
-  return [...paragraph.getElementsByTagName("*")].some((node) =>
-    ["fldChar", "instrText", "fldSimple"].includes(node.localName)
-  );
+function shouldSkipWordParagraph(text) {
+  const value = String(text || "").trim();
+  if (!value) return true;
+  return !/[A-Za-z\u3400-\u9fff]/.test(value);
 }
 
 function clearRemainingTextNodes(textNodes) {
