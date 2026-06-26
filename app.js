@@ -85,7 +85,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v62";
+const APP_VERSION = "v63";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -111,7 +111,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=62").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=63").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -1824,8 +1824,10 @@ function groupByPath(segments) {
 
 function writePresentationSegments(doc, segments) {
   const paragraphs = [...doc.getElementsByTagNameNS(DRAWING_NS, "p")];
+  const compactedSegments = compactPresentationTextBoxGroups(paragraphs, segments);
 
   segments.forEach((segment) => {
+    if (compactedSegments.has(segment)) return;
     const paragraph = paragraphs[segment.paragraphIndex];
     if (!paragraph || !segment.translation.trim()) return;
 
@@ -1862,6 +1864,72 @@ function writeWordSegments(doc, segments) {
     }
     writeWordTextNodes(textNodes, segment);
   });
+}
+
+function compactPresentationTextBoxGroups(paragraphs, segments) {
+  const compacted = new Set();
+  const groups = new Map();
+
+  segments.forEach((segment) => {
+    if (segment.type !== "pptx" || !segment.translation.trim()) return;
+    const key = getPptShapeGroupKey(segment);
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(segment);
+  });
+
+  groups.forEach((group) => {
+    const ordered = group.sort((a, b) => a.paragraphIndex - b.paragraphIndex);
+    if (!shouldCompactPresentationTextBoxGroup(ordered)) return;
+
+    const titleSegment = ordered[0];
+    const bodySegments = ordered.slice(1);
+    const titleParagraph = paragraphs[titleSegment.paragraphIndex];
+    const bodyParagraph = paragraphs[bodySegments[0]?.paragraphIndex];
+    if (!titleParagraph || !bodyParagraph) return;
+
+    writePresentationParagraphText(titleParagraph, titleSegment, cleanPptTranslationText(titleSegment.translation, titleSegment.original));
+    writePresentationParagraphText(
+      bodyParagraph,
+      bodySegments[0],
+      bodySegments.map((segment) => cleanPptTranslationText(segment.translation, segment.original)).filter(Boolean).join("\n"),
+    );
+
+    bodySegments.slice(1).forEach((segment) => {
+      const paragraph = paragraphs[segment.paragraphIndex];
+      const textNodes = [...(paragraph?.getElementsByTagNameNS(DRAWING_NS, "t") || [])];
+      if (textNodes.length) {
+        textNodes[0].textContent = "";
+        clearRemainingTextNodes(textNodes);
+      }
+    });
+
+    ordered.forEach((segment) => compacted.add(segment));
+  });
+
+  return compacted;
+}
+
+function shouldCompactPresentationTextBoxGroup(group) {
+  if (group.length < 3) return false;
+  const textLength = group.reduce((sum, segment) => sum + [...String(segment.original || "").trim()].length, 0);
+  const box = getPptContentBoxPt(group[0].layout || {});
+  return textLength <= 140 && Boolean(box);
+}
+
+function writePresentationParagraphText(paragraph, segment, text) {
+  const textNodes = [...paragraph.getElementsByTagNameNS(DRAWING_NS, "t")];
+  if (!textNodes.length) return;
+  if (shouldSuppressZeroBoundsPresentationText(segment, paragraph)) {
+    textNodes[0].textContent = "";
+    clearRemainingTextNodes(textNodes);
+    return;
+  }
+  textNodes[0].textContent = text;
+  normalizePresentationRunStyle(textNodes[0], segment);
+  applyPresentationBounds(paragraph, segment);
+  applyPresentationLayout(paragraph, segment);
+  clearRemainingTextNodes(textNodes);
 }
 
 function writeWordTextNodes(textNodes, segment) {
