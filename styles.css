@@ -256,7 +256,7 @@ h2 {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
   min-width: 0;
 }
 
@@ -589,6 +589,8 @@ textarea:focus {
 
 .panel {
   min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -730,7 +732,8 @@ textarea:focus {
 
 .table-wrap {
   overflow: auto;
-  max-height: calc(100vh - 178px);
+  min-height: 0;
+  max-height: none;
 }
 
 table {

@@ -101,7 +101,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v76";
+const APP_VERSION = "v77";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -136,7 +136,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=76").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=77").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -2886,15 +2886,19 @@ function createPdfOverlayPlan(segment, font) {
   const sourceFontSize = Math.max(4, Math.min(28, Number(segment.layout.fontSize || 10)));
   const paddingX = isTableLike ? Math.max(1.2, sourceFontSize * 0.12) : Math.max(2, sourceFontSize * 0.16);
   const paddingY = isTableLike ? Math.max(1, sourceFontSize * 0.1) : Math.max(1.5, sourceFontSize * 0.12);
-  const eraseWidth = Math.max(2, sourceBounds.width + paddingX * 2);
+  const eraseBaseX = Math.min(sourceBounds.x, fitBounds.x);
+  const eraseBaseY = Math.min(sourceBounds.y, fitBounds.y);
+  const eraseBaseRight = Math.max(sourceBounds.x + sourceBounds.width, fitBounds.x + fitBounds.width);
+  const eraseBaseTop = Math.max(sourceBounds.y + sourceBounds.height, fitBounds.y + fitBounds.height);
+  const eraseWidth = Math.max(2, eraseBaseRight - eraseBaseX + paddingX * 2);
   const eraseHeight = Math.max(
-    sourceBounds.height + paddingY * 2,
+    eraseBaseTop - eraseBaseY + paddingY * 2,
     sourceFontSize * (isTableLike ? 1.35 : 1.55)
   );
-  const eraseX = Math.max(0, sourceBounds.x - paddingX);
+  const eraseX = Math.max(0, eraseBaseX - paddingX);
   const eraseY = Math.max(
     0,
-    sourceBounds.y - paddingY - Math.max(0, (eraseHeight - sourceBounds.height) / 2)
+    eraseBaseY - paddingY - Math.max(0, (eraseHeight - (eraseBaseTop - eraseBaseY)) / 2)
   );
   const coverColor = segment.layout.backgroundColor || { r: 1, g: 1, b: 1 };
   const textColor = segment.layout.textColor || getReadablePdfTextColor(coverColor);
