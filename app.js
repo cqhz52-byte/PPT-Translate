@@ -63,6 +63,7 @@ const els = {
   mobileViewButton: document.querySelector("#mobileViewButton"),
   mobileViewMenu: document.querySelector("#mobileViewMenu"),
   mobileViewTargets: [...document.querySelectorAll("[data-mobile-view-target]")],
+  returnHomeButtons: [...document.querySelectorAll("[data-return-home]")],
   previewDialog: document.querySelector("#previewDialog"),
   previewCloseButton: document.querySelector("#previewCloseButton"),
   previewDownloadButton: document.querySelector("#previewDownloadButton"),
@@ -102,7 +103,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v87";
+const APP_VERSION = "v88";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -380,6 +381,14 @@ els.mobileViewTargets.forEach((button) => {
   button.addEventListener("click", () => {
     setMobileView(button.dataset.mobileViewTarget || "translate");
     setMobileMenuOpen(false);
+  });
+});
+
+els.returnHomeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    setMobileView("translate");
+    setMobileMenuOpen(false);
+    els.uploadZone?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   });
 });
 
@@ -2521,6 +2530,12 @@ function setMobileView(view) {
 }
 
 function openFileLibrary() {
+  if (state.mobileView === "library") {
+    setMobileView("translate");
+    setMobileMenuOpen(false);
+    els.uploadZone?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    return;
+  }
   setMobileView("library");
   setMobileMenuOpen(false);
   document.querySelector(".saved-files")?.scrollIntoView({ block: "nearest", behavior: "smooth" });

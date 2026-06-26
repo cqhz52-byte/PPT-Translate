@@ -17,7 +17,7 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="CuraWay">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v87 · 导入与预览优化</p>
+            <p class="version">v88 · 用户入口与返回优化</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -48,10 +48,8 @@
           </button>
           <a class="icon-button admin-button" href="/admin" title="超级管理员登录" aria-label="超级管理员登录">
             <svg class="admin-icon" aria-hidden="true" viewBox="0 0 24 24">
-              <path d="M15 7a4 4 0 1 1-2.8-3.82A4 4 0 0 1 15 7Z"></path>
-              <path d="m14 10 7 7"></path>
-              <path d="m18 14 2-2"></path>
-              <path d="m20 18 2-2"></path>
+              <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"></path>
+              <path d="M4.5 20a7.5 7.5 0 0 1 15 0"></path>
             </svg>
           </a>
           <button class="icon-button" id="resetButton" type="button" title="清空当前文件" aria-label="清空当前文件">
@@ -98,6 +96,7 @@
           </div>
 
           <div class="settings mobile-view-pane" data-mobile-pane="settings">
+            <button class="pane-back-button" type="button" data-return-home>返回主页</button>
             <label>
               PPT 版式策略
               <select id="pptLayoutMode">
@@ -144,7 +143,10 @@
           <section class="saved-files mobile-view-pane" data-mobile-pane="library" aria-label="已保存翻译文件">
             <div class="saved-files-head">
               <strong>已保存文件</strong>
-              <span id="savedFileCount">0</span>
+              <div class="saved-files-head-actions">
+                <button class="pane-back-button" type="button" data-return-home>返回主页</button>
+                <span id="savedFileCount">0</span>
+              </div>
             </div>
             <div class="batch-queue" id="batchQueue" hidden></div>
             <div class="saved-file-list" id="savedFileList">
@@ -292,7 +294,7 @@
               <li>右上角菜单可切换“翻译、参数、输出、文件库”分区。</li>
               <li>刷新或误触下拉刷新后，会自动恢复上次未导出的当前草稿。</li>
               <li>长文件翻译或 PDF 导出时请保持页面打开，避免锁屏或切到后台。</li>
-              <li>右上角钥匙图标可进入超级管理员登录和授权手机号管理。</li>
+              <li>右上角用户头像图标可进入超级管理员登录和授权手机号管理。</li>
             </ul>
           </section>
         </div>
@@ -300,6 +302,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=87" type="module"></script>
+    <script src="app.js?v=88" type="module"></script>
   </body>
 </html>
