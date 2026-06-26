@@ -500,6 +500,12 @@ textarea:focus {
   font-size: 14px;
 }
 
+.saved-files-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .saved-files-head span {
   display: inline-grid;
   place-items: center;
@@ -510,6 +516,16 @@ textarea:focus {
   color: #fff;
   font-size: 12px;
   font-weight: 800;
+}
+
+.pane-back-button {
+  display: none;
+  min-height: 34px;
+  padding: 0 10px;
+  border-color: var(--line);
+  background: #fff;
+  color: var(--accent);
+  font-size: 12px;
 }
 
 .batch-queue,
@@ -1474,6 +1490,13 @@ td:first-child {
   .stats {
     width: 100%;
     min-width: 0;
+  }
+
+  .pane-back-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    justify-self: start;
   }
 
   .workspace[data-mobile-view="translate"] .mobile-view-pane:not([data-mobile-pane="translate"]),
