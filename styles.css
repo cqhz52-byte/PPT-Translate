@@ -256,7 +256,7 @@ h2 {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   gap: 18px;
-  align-items: stretch;
+  align-items: start;
   min-width: 0;
 }
 
@@ -273,6 +273,7 @@ h2 {
   position: sticky;
   top: 24px;
   display: grid;
+  align-content: start;
   gap: 18px;
   padding: 18px;
 }
@@ -591,6 +592,7 @@ textarea:focus {
   min-width: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  max-height: calc(100vh - 178px);
   overflow: hidden;
 }
 
@@ -733,7 +735,7 @@ textarea:focus {
 .table-wrap {
   overflow: auto;
   min-height: 0;
-  max-height: none;
+  max-height: 100%;
 }
 
 table {
@@ -1352,6 +1354,10 @@ td:first-child {
     position: static;
     gap: 14px;
     padding: 14px;
+  }
+
+  .panel {
+    max-height: none;
   }
 
   .upload-zone,
