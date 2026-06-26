@@ -302,6 +302,20 @@ h2 {
   box-shadow: inset 0 0 0 2px rgba(22, 90, 114, 0.14);
 }
 
+.is-busy .upload-zone {
+  border-color: var(--accent);
+  border-style: solid;
+  background:
+    linear-gradient(90deg, rgba(22, 90, 114, 0.08), rgba(67, 143, 111, 0.14), rgba(22, 90, 114, 0.08)),
+    var(--surface-2);
+  background-size: 220% 100%;
+  animation: upload-busy-sweep 1.4s ease-in-out infinite;
+}
+
+.is-busy .upload-icon {
+  animation: upload-icon-pulse 1.1s ease-in-out infinite;
+}
+
 .upload-zone input {
   position: absolute;
   inline-size: 1px;
@@ -320,6 +334,27 @@ h2 {
   color: #fff;
   font-size: 32px;
   line-height: 1;
+}
+
+@keyframes upload-busy-sweep {
+  0% {
+    background-position: 0% 50%;
+  }
+
+  100% {
+    background-position: 220% 50%;
+  }
+}
+
+@keyframes upload-icon-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.06);
+  }
 }
 
 .upload-title {
@@ -1582,6 +1617,17 @@ td:first-child {
     margin: auto;
   }
 
+  .preview-dialog {
+    width: 100dvw;
+    max-width: 100dvw;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .preview-shell {
+    max-height: 100dvh;
+  }
+
   .preview-head,
   .preview-body,
   .help-head,
@@ -1595,6 +1641,48 @@ td:first-child {
     align-items: flex-end;
     flex-direction: column-reverse;
     min-width: 0;
+  }
+
+  .preview-body {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .original-file-panel {
+    padding: 12px;
+  }
+
+  .original-pdf-pages {
+    width: 100%;
+    gap: 12px;
+    justify-items: stretch;
+  }
+
+  .original-pdf-page {
+    width: 100%;
+    gap: 6px;
+  }
+
+  .original-pdf-page canvas {
+    border-radius: 4px;
+    box-shadow: none;
+  }
+
+  .original-docx-preview {
+    width: 100%;
+    padding: 16px;
+    gap: 14px;
+    box-shadow: none;
+  }
+
+  .original-docx-preview p {
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .original-layout-card {
+    width: 100%;
+    padding: 10px;
   }
 
   .slide-box-tools {
