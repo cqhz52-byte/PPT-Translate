@@ -16,14 +16,6 @@ const app = read("app.js")
   .replace(
     /if \("serviceWorker" in navigator\) \{[\s\S]*?\r?\n\}\r?\n\r?\n/,
     ""
-  )
-  .replace(
-    /window\.addEventListener\("beforeinstallprompt"[\s\S]*?\r?\n\}\);\r?\n\r?\n/,
-    ""
-  )
-  .replace(
-    /els\.installButton\.addEventListener\("click"[\s\S]*?\r?\n\}\);\r?\n\r?\n/,
-    ""
   );
 
 const html = `<!doctype html>

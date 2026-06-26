@@ -16,7 +16,6 @@ const state = {
   translationAbortController: null,
   summaryRunning: false,
   savedFiles: [],
-  installPrompt: null,
   wakeLock: null,
   wakeLockNoticeShown: false,
   wakeLockWarningShown: false,
@@ -57,7 +56,7 @@ const els = {
   helpButton: document.querySelector("#helpButton"),
   helpDialog: document.querySelector("#helpDialog"),
   helpCloseButton: document.querySelector("#helpCloseButton"),
-  installButton: document.querySelector("#installButton"),
+  libraryButton: document.querySelector("#libraryButton"),
   workspace: document.querySelector("#workspace"),
   mobileViewButton: document.querySelector("#mobileViewButton"),
   mobileViewMenu: document.querySelector("#mobileViewMenu"),
@@ -101,7 +100,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v77";
+const APP_VERSION = "v78";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -136,7 +135,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=77").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=78").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -357,22 +356,7 @@ async function applyAppUpdate() {
   window.location.reload();
 }
 
-window.addEventListener("beforeinstallprompt", (event) => {
-  event.preventDefault();
-  state.installPrompt = event;
-  els.installButton.hidden = false;
-});
-
-els.installButton.addEventListener("click", async () => {
-  if (!state.installPrompt) {
-    showToast("????????????????????????????????????????/???????");
-    return;
-  }
-  state.installPrompt.prompt();
-  await state.installPrompt.userChoice;
-  state.installPrompt = null;
-  els.installButton.hidden = true;
-});
+els.libraryButton?.addEventListener("click", openFileLibrary);
 
 els.fileInput.addEventListener("change", async (event) => {
   const files = [...(event.target.files || [])];
@@ -2574,6 +2558,12 @@ function setMobileView(view) {
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-current", isActive ? "page" : "false");
   });
+}
+
+function openFileLibrary() {
+  setMobileView("library");
+  setMobileMenuOpen(false);
+  document.querySelector(".saved-files")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function setBusy(isBusy, message = "") {

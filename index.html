@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=77">
+    <link rel="stylesheet" href="styles.css?v=78">
   </head>
   <body>
     <main class="shell">
@@ -17,7 +17,7 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="CuraWay">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v77 · PDF 擦除与桌面布局优化</p>
+            <p class="version">v78 · 顶部文件库入口</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -36,12 +36,11 @@
               <button type="button" data-mobile-view-target="library">文件库</button>
             </div>
           </div>
-          <button class="icon-button install-button" id="installButton" type="button" title="安装到桌面" aria-label="安装到桌面">
-            <svg class="install-icon" aria-hidden="true" viewBox="0 0 24 24">
-              <path d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"></path>
-              <path d="M12 7v7"></path>
-              <path d="m9 11 3 3 3-3"></path>
-              <path d="M10 18h4"></path>
+          <button class="icon-button library-button" id="libraryButton" type="button" title="打开文件库" aria-label="打开文件库">
+            <svg class="library-icon" aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10l2 2h5.5A2.5 2.5 0 0 1 20 8.5v9A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5Z"></path>
+              <path d="M8 11h8"></path>
+              <path d="M8 15h6"></path>
             </svg>
           </button>
           <button class="icon-button help-button" id="helpButton" type="button" title="查看帮助" aria-label="查看帮助">
@@ -301,6 +300,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=77" type="module"></script>
+    <script src="app.js?v=78" type="module"></script>
   </body>
 </html>

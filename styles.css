@@ -225,7 +225,7 @@ h2 {
   text-decoration: none;
 }
 
-.install-button {
+.library-button {
   color: var(--accent);
 }
 
@@ -237,7 +237,7 @@ h2 {
   color: var(--accent);
 }
 
-.install-icon,
+.library-icon,
 .admin-icon {
   width: 24px;
   height: 24px;
@@ -248,7 +248,7 @@ h2 {
   stroke-linejoin: round;
 }
 
-.install-button:hover .install-icon {
+.library-button:hover .library-icon {
   transform: translateY(1px);
 }
 
