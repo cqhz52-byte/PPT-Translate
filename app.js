@@ -100,7 +100,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v85";
+const APP_VERSION = "v86";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -2883,6 +2883,191 @@ function renderOriginalDocumentPreview() {
 
   const url = getOriginalPreviewUrl();
   if (state.fileType === "pdf") {
+    renderOriginalPdfPreview(url);
+    return;
+  }
+
+  if (state.fileType === "pptx") {
+    renderOriginalPptxPreview(url);
+    return;
+  }
+
+  if (state.fileType === "docx") {
+    renderOriginalDocxPreview(url);
+    return;
+  }
+
+  els.previewBody.append(
+    createOriginalPreviewPanel(
+      "无法预览此格式",
+      "此格式无法在浏览器内直接预览，可使用下方入口打开或下载原始文件。",
+      url
+    )
+  );
+}
+
+function renderOriginalPdfPreview(url) {
+  els.previewBody.append(
+    createOriginalPreviewPanel(
+      "原始 PDF 页面预览",
+      "下方使用 PDF.js 逐页渲染上传的原始 PDF，用于核对是否为需要翻译的文献。",
+      url
+    )
+  );
+
+  const pages = document.createElement("div");
+  pages.className = "original-pdf-pages";
+  pages.append(createOriginalPreviewFallback("正在渲染 PDF 原始页面..."));
+  els.previewBody.append(pages);
+
+  renderOriginalPdfPages(pages).catch((error) => {
+    console.warn("Original PDF preview failed", error);
+    pages.replaceChildren(createOriginalPreviewFallback("PDF 页面渲染失败，可使用上方按钮打开或下载原始文件。"));
+  });
+}
+
+async function renderOriginalPdfPages(container) {
+  if (!state.pdfBytes) throw new Error("Missing PDF bytes.");
+  const pdfjs = await loadPdfJs();
+  const pdf = await pdfjs.getDocument({ data: state.pdfBytes.slice() }).promise;
+  container.replaceChildren();
+
+  const scale = isLikelyMobileDevice() ? 1.05 : 1.28;
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const pdfPage = await pdf.getPage(pageNumber);
+    const viewport = pdfPage.getViewport({ scale });
+    const pageShell = document.createElement("section");
+    pageShell.className = "original-pdf-page";
+
+    const label = document.createElement("span");
+    label.textContent = `第 ${pageNumber} 页`;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    canvas.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("Canvas unavailable.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    pageShell.append(label, canvas);
+    container.append(pageShell);
+    await pdfPage.render({ canvasContext: context, viewport }).promise;
+    await waitForUiFrame();
+  }
+
+  if (!container.children.length) {
+    container.append(createOriginalPreviewFallback("PDF 没有可渲染页面，可使用上方按钮打开或下载原始文件。"));
+  }
+}
+
+function renderOriginalPptxPreview(url) {
+  els.previewBody.append(
+    createOriginalPreviewPanel(
+      "PPTX 原文版式预览",
+      "浏览器无法直接执行 PowerPoint 渲染；下方使用已解析的文本框坐标和图片占位还原原文版式，用于快速核对源文件内容。",
+      url
+    )
+  );
+
+  const previousMode = state.previewMode;
+  state.previewMode = "source";
+  groupSegmentsForPreview().forEach((group) => {
+    const section = document.createElement("section");
+    section.className = "preview-card original-layout-card";
+    const heading = document.createElement("h3");
+    heading.textContent = group.label;
+    section.append(heading);
+    try {
+      section.append(createSlidePreview(group.segments));
+    } catch (error) {
+      console.warn("Original PPTX preview fallback", error);
+      group.segments.forEach((segment) => section.append(createOriginalPreviewItem(segment)));
+    }
+    els.previewBody.append(section);
+  });
+  state.previewMode = previousMode;
+}
+
+function renderOriginalDocxPreview(url) {
+  els.previewBody.append(
+    createOriginalPreviewPanel(
+      "DOCX 原文内容预览",
+      "浏览器无法完整复刻 Word/WPS 分页和样式；下方展示已解析出的完整原文段落，用于核对源文件内容。",
+      url
+    )
+  );
+
+  const doc = document.createElement("article");
+  doc.className = "original-docx-preview";
+  groupSegmentsForPreview().forEach((group) => {
+    const section = document.createElement("section");
+    const heading = document.createElement("h3");
+    heading.textContent = group.label;
+    section.append(heading);
+    group.segments.forEach((segment) => {
+      const paragraph = document.createElement("p");
+      paragraph.textContent = segment.original;
+      section.append(paragraph);
+    });
+    doc.append(section);
+  });
+  els.previewBody.append(doc);
+}
+
+function createOriginalPreviewPanel(titleText, messageText, url) {
+  const panel = document.createElement("section");
+  panel.className = "original-file-panel";
+  const title = document.createElement("h3");
+  title.textContent = titleText;
+  const message = document.createElement("p");
+  message.textContent = messageText;
+  panel.append(title, message, createOriginalFileActions(url));
+  return panel;
+}
+
+function createOriginalPreviewItem(segment) {
+  const item = document.createElement("article");
+  item.className = "preview-item source";
+  const text = document.createElement("p");
+  text.textContent = segment.original;
+  const meta = document.createElement("span");
+  meta.textContent = "原文片段";
+  item.append(text, meta);
+  return item;
+}
+
+function createOriginalPreviewFallback(message) {
+  const fallback = document.createElement("div");
+  fallback.className = "preview-fallback";
+  fallback.textContent = message;
+  return fallback;
+}
+
+function renderOriginalDocumentPreviewLegacy() {
+  if (els.previewTitle) {
+    els.previewTitle.textContent = "原始文献预览";
+  }
+  if (els.previewDownloadButton) els.previewDownloadButton.hidden = true;
+  if (els.previewShareButton) els.previewShareButton.hidden = true;
+  if (els.previewMeta) {
+    els.previewMeta.textContent = state.file
+      ? `${state.file.name} · ${formatBytes(state.file.size)} · 原始文件核对`
+      : "请先选择文献。";
+  }
+  els.previewBody.replaceChildren();
+
+  if (!state.file) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "还没有可预览的原始文献。";
+    els.previewBody.append(empty);
+    return;
+  }
+
+  const url = getOriginalPreviewUrl();
+  if (state.fileType === "pdf") {
     const panel = document.createElement("section");
     panel.className = "original-file-panel";
     const title = document.createElement("h3");
@@ -3656,6 +3841,7 @@ async function restoreCurrentDraft() {
     showToast("已恢复上次未导出的翻译内容。");
   } catch (error) {
     console.warn("Draft restore failed", error);
+    await resetApp(false, { clearDraft: true });
     setStatus("上次编辑内容恢复失败，请重新选择文件。");
   } finally {
     isRestoringDraft = false;

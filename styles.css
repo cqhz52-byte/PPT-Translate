@@ -990,6 +990,34 @@ td:first-child {
   background: #fff;
 }
 
+.original-pdf-pages {
+  display: grid;
+  gap: 18px;
+  justify-items: center;
+}
+
+.original-pdf-page {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 880px);
+}
+
+.original-pdf-page > span {
+  justify-self: start;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.original-pdf-page canvas {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(26, 52, 64, 0.12);
+}
+
 .original-file-panel {
   display: grid;
   gap: 12px;
@@ -1021,6 +1049,42 @@ td:first-child {
   color: var(--ink);
   font-weight: 800;
   text-decoration: none;
+}
+
+.original-docx-preview {
+  display: grid;
+  gap: 18px;
+  width: min(100%, 860px);
+  justify-self: center;
+  padding: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(26, 52, 64, 0.08);
+}
+
+.original-docx-preview section {
+  display: grid;
+  gap: 10px;
+}
+
+.original-docx-preview h3 {
+  margin: 0;
+  color: var(--accent);
+  font-size: 15px;
+}
+
+.original-docx-preview p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.original-layout-card {
+  gap: 14px;
 }
 
 .help-body {
