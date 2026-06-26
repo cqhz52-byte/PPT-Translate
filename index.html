@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=71">
+    <link rel="stylesheet" href="styles.css?v=72">
   </head>
   <body>
     <main class="shell">
@@ -17,7 +17,7 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="CuraWay">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v71 · 整页缩略工作窗</p>
+            <p class="version">v72 · 移除迷你窗并清理总结符号</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -136,7 +136,6 @@
             <button id="previewButton" type="button" disabled>版式预览/调整</button>
             <button id="downloadButton" type="button" disabled>导出翻译文件</button>
             <button id="shareButton" type="button" disabled>分享翻译文件</button>
-            <button id="miniModeButton" type="button">迷你工作窗</button>
           </div>
 
           <section class="saved-files mobile-view-pane" data-mobile-pane="library" aria-label="已保存翻译文件">
@@ -250,13 +249,6 @@
       </div>
     </dialog>
 
-    <div class="mini-workspace" id="miniWorkspace" hidden>
-      <strong>文档处理</strong>
-      <span id="miniStatus">空闲</span>
-      <div class="mini-progress" aria-hidden="true"><span id="miniProgressFill"></span></div>
-      <button id="miniExitButton" type="button">展开</button>
-    </div>
-
     <dialog class="help-dialog" id="helpDialog">
       <div class="help-shell">
         <header class="help-head">
@@ -304,6 +296,6 @@
     </dialog>
 
     <script src="vendor/jszip.min.js"></script>
-    <script src="app.js?v=71" type="module"></script>
+    <script src="app.js?v=72" type="module"></script>
   </body>
 </html>

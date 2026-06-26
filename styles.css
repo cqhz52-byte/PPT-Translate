@@ -989,78 +989,6 @@ td:first-child {
   line-height: 1.65;
 }
 
-.mini-workspace {
-  position: fixed;
-  right: max(14px, env(safe-area-inset-right));
-  bottom: max(14px, env(safe-area-inset-bottom));
-  z-index: 110;
-  display: grid;
-  gap: 8px;
-  width: min(320px, calc(100vw - 28px));
-  padding: 12px;
-  border: 1px solid rgba(22, 90, 114, 0.22);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: var(--shadow);
-}
-
-.mini-workspace strong {
-  color: var(--accent);
-  font-size: 14px;
-}
-
-.mini-workspace span {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.mini-progress {
-  height: 7px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--surface-2);
-}
-
-.mini-progress span {
-  display: block;
-  width: 0%;
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
-}
-
-.mini-workspace button {
-  min-height: 34px;
-}
-
-body.mini-mode {
-  overflow: hidden;
-}
-
-.mini-mode .shell {
-  position: fixed;
-  right: max(12px, env(safe-area-inset-right));
-  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 108px);
-  z-index: 108;
-  width: 900px;
-  max-width: none;
-  height: 1450px;
-  max-height: none;
-  padding: 22px;
-  overflow: auto;
-  border: 1px solid rgba(22, 90, 114, 0.22);
-  border-radius: 14px;
-  background: var(--bg);
-  box-shadow: 0 24px 70px rgba(20, 35, 32, 0.26);
-  pointer-events: none;
-  transform: scale(0.32);
-  transform-origin: right bottom;
-}
-
-.mini-mode .toast {
-  z-index: 125;
-}
-
 .help-body section {
   display: grid;
   gap: 10px;
@@ -1606,15 +1534,4 @@ body.mini-mode {
     gap: 10px;
   }
 
-  .mini-workspace {
-    right: 10px;
-    bottom: 10px;
-    width: calc(100vw - 20px);
-  }
-
-  .mini-mode .shell {
-    right: 10px;
-    bottom: 118px;
-    transform: scale(0.3);
-  }
 }

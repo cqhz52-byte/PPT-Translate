@@ -48,11 +48,6 @@ const els = {
   summaryCopyButton: document.querySelector("#summaryCopyButton"),
   summaryMeta: document.querySelector("#summaryMeta"),
   summaryOutput: document.querySelector("#summaryOutput"),
-  miniModeButton: document.querySelector("#miniModeButton"),
-  miniWorkspace: document.querySelector("#miniWorkspace"),
-  miniStatus: document.querySelector("#miniStatus"),
-  miniProgressFill: document.querySelector("#miniProgressFill"),
-  miniExitButton: document.querySelector("#miniExitButton"),
   resetButton: document.querySelector("#resetButton"),
   helpButton: document.querySelector("#helpButton"),
   helpDialog: document.querySelector("#helpDialog"),
@@ -98,7 +93,7 @@ const CURRENT_DRAFT_DB = "curaway-current-draft-v1";
 const CURRENT_DRAFT_STORE = "drafts";
 const CURRENT_DRAFT_ID = "current";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v71";
+const APP_VERSION = "v72";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -133,7 +128,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=71").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=72").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -444,8 +439,6 @@ els.summaryCopyButton?.addEventListener("click", copySummary);
 els.summaryDialog?.addEventListener("click", (event) => {
   if (event.target === els.summaryDialog) closeSummary();
 });
-els.miniModeButton?.addEventListener("click", enableMiniMode);
-els.miniExitButton?.addEventListener("click", disableMiniMode);
 els.downloadButton.addEventListener("click", downloadPresentation);
 els.shareButton.addEventListener("click", sharePresentation);
 els.resetButton.addEventListener("click", handleResetButtonClick);
@@ -1691,7 +1684,7 @@ function buildDocumentSummaryInstruction(detail) {
 
 function openSummary(summary, detail) {
   if (!els.summaryDialog || !els.summaryOutput) return;
-  els.summaryOutput.textContent = summary;
+  els.summaryOutput.textContent = cleanSummaryText(summary);
   if (els.summaryMeta) {
     const labels = { brief: "简要", standard: "标准", detailed: "详细" };
     els.summaryMeta.textContent = `${getFileTypeName()} · ${state.segments.length} 段文本 · ${labels[detail] || "标准"}总结`;
@@ -1701,6 +1694,13 @@ function openSummary(summary, detail) {
   } else {
     els.summaryDialog.setAttribute("open", "");
   }
+}
+
+function cleanSummaryText(text) {
+  return String(text || "")
+    .replace(/\*+/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
 }
 
 function closeSummary() {
@@ -2426,17 +2426,6 @@ function setMobileView(view) {
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-current", isActive ? "page" : "false");
   });
-}
-
-function enableMiniMode() {
-  document.body.classList.add("mini-mode");
-  if (els.miniWorkspace) els.miniWorkspace.hidden = false;
-  showToast("已切换为迷你工作窗。手机切到其他 App 后，系统仍可能暂停网页任务。");
-}
-
-function disableMiniMode() {
-  document.body.classList.remove("mini-mode");
-  if (els.miniWorkspace) els.miniWorkspace.hidden = true;
 }
 
 function setBusy(isBusy, message = "") {
@@ -3245,7 +3234,6 @@ function groupSegmentsForPreview() {
 
 function setStatus(message) {
   els.statusText.textContent = message;
-  if (els.miniStatus) els.miniStatus.textContent = message || "空闲";
 }
 
 function setProgress(value) {
@@ -3253,9 +3241,6 @@ function setProgress(value) {
   els.progressFill.style.width = `${percent}%`;
   els.progressFill.style.setProperty("--progress-percent", `${percent}%`);
   els.statusVisual?.style.setProperty("--progress-deg", `${Math.round(percent * 3.6)}deg`);
-  if (els.miniProgressFill) {
-    els.miniProgressFill.style.width = `${percent}%`;
-  }
 }
 
 function waitForUiFrame() {
