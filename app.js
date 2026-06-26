@@ -30,6 +30,8 @@ const state = {
   previewMode: "translation",
   activeSummary: null,
   originalPreviewUrl: "",
+  loadToken: 0,
+  importRunning: false,
 };
 
 const els = {
@@ -100,7 +102,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v86";
+const APP_VERSION = "v87";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -360,6 +362,7 @@ els.libraryButton?.addEventListener("click", openFileLibrary);
 
 els.fileInput.addEventListener("change", async (event) => {
   const files = [...(event.target.files || [])];
+  event.target.value = "";
   if (!files.length) return;
   if (files.length > 1) {
     queueBatchFiles(files);
@@ -414,6 +417,7 @@ setMobileView(state.mobileView);
       if (files.length > 1) {
         queueBatchFiles(files);
       } else if (files[0]) {
+        els.fileInput.value = "";
         loadOfficeFile(files[0]);
       }
     }
@@ -470,6 +474,9 @@ restoreCurrentDraft().catch((error) => {
 
 async function loadOfficeFile(file, options = {}) {
   const silent = Boolean(options.silent);
+  const loadToken = Date.now() + Math.random();
+  state.loadToken = loadToken;
+  state.importRunning = true;
   try {
     if (/\.ppt$/i.test(file.name) && !/\.pptx$/i.test(file.name)) {
       throw new Error("当前网页版只能可靠解析和回写 PPTX。请先用 PowerPoint/WPS 将 .ppt 另存为 .pptx。");
@@ -483,7 +490,9 @@ async function loadOfficeFile(file, options = {}) {
       throw new Error("请选择 .pptx、.docx 或 .pdf 文件。");
     }
 
-    setBusy(true, "正在读取文件...");
+    setProgress(0.02);
+    setBusy(true, `正在导入 ${file.name}...`);
+    els.fileMeta.textContent = `${file.name} · 正在导入...`;
     revokeOriginalPreviewUrl();
     state.file = file;
     state.fileType = getFileTypeFromName(file.name);
@@ -497,16 +506,23 @@ async function loadOfficeFile(file, options = {}) {
     state.pdfBytes = null;
 
     if (state.fileType === "pdf") {
-      await loadPdfDocument(file);
+      await loadPdfDocument(file, loadToken);
     } else {
+      setProgress(0.08);
+      setStatus(`正在展开 ${getFileTypeName()} 文件结构，请稍候...`);
+      await waitForUiFrame();
       state.zip = await JSZip.loadAsync(file);
     }
 
+    if (state.loadToken !== loadToken) return;
+
     if (state.fileType === "docx") {
-      await loadWordDocument();
+      await loadWordDocument(loadToken);
     } else if (state.fileType === "pptx") {
-      await loadPresentation();
+      await loadPresentation(loadToken);
     }
+
+    if (state.loadToken !== loadToken) return;
 
     renderSegments();
     updateStats();
@@ -515,14 +531,23 @@ async function loadOfficeFile(file, options = {}) {
     if (!options.skipDraftSave) scheduleCurrentDraftSave({ immediate: true });
     if (!silent) showToast(`${getFileTypeName()} 已载入，可以开始翻译或手动编辑。`);
   } catch (error) {
-    showToast(error.message || "读取文件失败。", true);
-    resetApp(false, { clearDraft: false });
+    if (state.loadToken === loadToken) {
+      showToast(error.message || "读取文件失败。", true);
+      resetApp(false, { clearDraft: false });
+    }
   } finally {
-    setBusy(false);
+    if (state.loadToken === loadToken) {
+      state.importRunning = false;
+      setBusy(false);
+    }
   }
 }
 
-async function loadPresentation() {
+async function loadPresentation(loadToken = state.loadToken) {
+    setProgress(0.14);
+    setStatus("正在读取 PPTX 幻灯片列表...");
+    await waitForUiFrame();
+    if (state.loadToken !== loadToken) return;
     state.slideSize = await readSlideSize();
     const slideFiles = Object.keys(state.zip.files)
       .map((path) => ({ path, match: path.match(slidePathPattern) }))
@@ -531,9 +556,16 @@ async function loadPresentation() {
 
     state.slideCount = slideFiles.length;
 
-    for (const item of slideFiles) {
+    for (let index = 0; index < slideFiles.length; index += 1) {
+      if (state.loadToken !== loadToken) return;
+      const item = slideFiles[index];
       const slideNumber = Number(item.match[1]);
+      setProgress(0.14 + ((index + 1) / Math.max(1, slideFiles.length)) * 0.76);
+      setStatus(`正在解析 PPTX 第 ${slideNumber}/${slideFiles.length} 页...`);
+      await waitForUiFrame();
+      if (state.loadToken !== loadToken) return;
       const xmlText = await state.zip.file(item.path).async("text");
+      if (state.loadToken !== loadToken) return;
       const doc = parser.parseFromString(xmlText, "application/xml");
       const parseError = doc.querySelector("parsererror");
       if (parseError) {
@@ -565,19 +597,25 @@ async function loadPresentation() {
     }
 }
 
-async function loadPdfDocument(file) {
+async function loadPdfDocument(file, loadToken = state.loadToken) {
   const pdfjs = await loadPdfJs();
+  if (state.loadToken !== loadToken) return;
   const pdfBytes = new Uint8Array(await file.arrayBuffer());
+  if (state.loadToken !== loadToken) return;
   state.pdfBytes = pdfBytes.slice();
   const pdf = await pdfjs.getDocument({ data: pdfBytes }).promise;
+  if (state.loadToken !== loadToken) return;
   state.slideCount = pdf.numPages;
   let pdfReferenceSectionStarted = false;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    if (state.loadToken !== loadToken) return;
     setProgress(pdf.numPages ? pageNumber / pdf.numPages : 0);
     setStatus(`正在解析 PDF 第 ${pageNumber}/${pdf.numPages} 页，提取文字和页面背景...`);
     await waitForUiFrame();
+    if (state.loadToken !== loadToken) return;
     const page = await pdf.getPage(pageNumber);
+    if (state.loadToken !== loadToken) return;
     const viewport = page.getViewport({ scale: 1 });
     state.pdfPageSizes.set(`pdf/page-${pageNumber}`, {
       width: viewport.width || 595.28,
@@ -592,6 +630,7 @@ async function loadPdfDocument(file) {
     const pageWidth = viewport.width || 595.28;
     const pageHeight = viewport.height || 841.89;
     const content = await page.getTextContent();
+    if (state.loadToken !== loadToken) return;
     const lines = extractPdfLineSegments(content.items, pageWidth);
     const referenceContext = getPdfReferenceContext(lines, pageHeight, pdfReferenceSectionStarted);
     pdfReferenceSectionStarted = pdfReferenceSectionStarted || referenceContext.startedOnPage;
@@ -1094,7 +1133,7 @@ function splitPdfRowIntoSegments(row, pageWidth, rowGap = 0) {
   });
 }
 
-async function loadWordDocument() {
+async function loadWordDocument(loadToken = state.loadToken) {
   const wordFiles = Object.keys(state.zip.files)
     .filter((path) => wordPathPattern.test(path))
     .sort((a, b) => a.localeCompare(b));
@@ -1106,7 +1145,9 @@ async function loadWordDocument() {
   state.slideCount = wordFiles.length;
 
   for (const path of wordFiles) {
+    if (state.loadToken !== loadToken) return;
     const xmlText = await state.zip.file(path).async("text");
+    if (state.loadToken !== loadToken) return;
     const doc = parser.parseFromString(xmlText, "application/xml");
     const parseError = doc.querySelector("parsererror");
     if (parseError) {
@@ -2510,7 +2551,7 @@ function setBusy(isBusy, message = "") {
   if (els.previewShareButton) {
     els.previewShareButton.disabled = effectiveBusy || !state.segments.length || !hasTranslations;
   }
-  els.fileInput.disabled = effectiveBusy;
+  els.fileInput.disabled = effectiveBusy && !state.importRunning;
   document.body.classList.toggle("is-busy", effectiveBusy);
   if (els.statusVisual) {
     els.statusVisual.classList.toggle("active", effectiveBusy);
@@ -2932,7 +2973,7 @@ async function renderOriginalPdfPages(container) {
   const pdf = await pdfjs.getDocument({ data: state.pdfBytes.slice() }).promise;
   container.replaceChildren();
 
-  const scale = isLikelyMobileDevice() ? 1.05 : 1.28;
+  const scale = isLikelyMobileDevice() ? 1.75 : 1.55;
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const pdfPage = await pdf.getPage(pageNumber);
     const viewport = pdfPage.getViewport({ scale });
@@ -3927,6 +3968,7 @@ async function resetApp(clearInput = true, options = {}) {
   state.translationRunning = false;
   state.batchRunning = false;
   state.batchCancelRequested = true;
+  state.importRunning = false;
   state.file = null;
   state.fileType = "";
   state.zip = null;
