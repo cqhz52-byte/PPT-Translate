@@ -3,7 +3,7 @@
   "short_name": "\u6587\u6863\u7ffb\u8bd1",
   "description": "\u5c06\u4e2d\u6587\u548c\u82f1\u6587 PPTX/DOCX/PDF \u6587\u6863\u53cc\u5411\u7ffb\u8bd1\u5e76\u91cd\u65b0\u5bfc\u51fa\u3002",
   "id": "/",
-  "start_url": "/?v=68",
+  "start_url": "/?v=69",
   "scope": ".",
   "display": "standalone",
   "background_color": "#f6f8f7",

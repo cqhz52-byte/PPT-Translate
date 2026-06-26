@@ -281,6 +281,8 @@ h2 {
   display: grid;
   place-items: center;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
   min-height: 180px;
   padding: 20px;
   border: 1px dashed #9bb1ab;
@@ -317,13 +319,18 @@ h2 {
 }
 
 .upload-title {
+  max-width: 100%;
   font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .upload-copy {
+  max-width: 100%;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .settings {
@@ -409,6 +416,14 @@ textarea:focus {
 .actions {
   display: grid;
   gap: 10px;
+  min-width: 0;
+}
+
+.actions button {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .menu-icon {
@@ -537,14 +552,17 @@ textarea:focus {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .stats div {
   display: grid;
   gap: 2px;
   min-width: 0;
+  overflow: hidden;
   padding: 10px;
   border-radius: 8px;
   background: var(--accent-soft);
@@ -558,6 +576,7 @@ textarea:focus {
 .stats span {
   color: var(--muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .panel {
@@ -1326,6 +1345,15 @@ td:first-child {
     padding: 14px;
   }
 
+  .upload-zone,
+  .settings,
+  .actions,
+  .saved-files,
+  .stats {
+    width: 100%;
+    min-width: 0;
+  }
+
   .workspace[data-mobile-view="translate"] .mobile-view-pane:not([data-mobile-pane="translate"]),
   .workspace[data-mobile-view="settings"] .mobile-view-pane:not([data-mobile-pane="settings"]),
   .workspace[data-mobile-view="output"] .mobile-view-pane:not([data-mobile-pane="output"]),
@@ -1486,6 +1514,33 @@ td:first-child {
     min-width: 0;
     max-width: calc(100dvw - 28px);
     flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 560px) {
+  .upload-zone {
+    min-height: 150px;
+    padding: 14px;
+  }
+
+  .upload-copy {
+    font-size: 12px;
+  }
+
+  .stats {
+    gap: 6px;
+  }
+
+  .stats div {
+    padding: 8px;
+  }
+
+  .stats strong {
+    font-size: 18px;
+  }
+
+  .stats span {
+    font-size: 11px;
   }
 }
 
