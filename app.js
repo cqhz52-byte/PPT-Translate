@@ -30,6 +30,7 @@ const state = {
   pullIndicator: null,
   previewMode: "translation",
   activeSummary: null,
+  originalPreviewUrl: "",
 };
 
 const els = {
@@ -100,7 +101,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v75";
+const APP_VERSION = "v76";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -135,7 +136,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=75").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=76").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -499,6 +500,7 @@ async function loadOfficeFile(file, options = {}) {
     }
 
     setBusy(true, "正在读取文件...");
+    revokeOriginalPreviewUrl();
     state.file = file;
     state.fileType = getFileTypeFromName(file.name);
     state.zip = null;
@@ -2669,7 +2671,7 @@ function openPreview() {
 }
 
 function openSourcePreview() {
-  state.previewMode = "source";
+  state.previewMode = "original";
   renderPreview();
   openPreviewDialog();
 }
@@ -2683,7 +2685,12 @@ function openPreviewDialog() {
 }
 
 function closePreview() {
-  els.previewDialog.close();
+  if (typeof els.previewDialog.close === "function" && els.previewDialog.open) {
+    els.previewDialog.close();
+  } else {
+    els.previewDialog.removeAttribute("open");
+  }
+  revokeOriginalPreviewUrl();
 }
 
 function openHelp() {
@@ -2708,6 +2715,11 @@ function renderPreview() {
   const previousScrollTop = els.previewBody.scrollTop;
   const selectedIndex = els.previewBody.querySelector(".slide-text-box.selected")?.dataset.index || "";
   const translated = state.segments.filter((segment) => segment.translation.trim()).length;
+  const isOriginalMode = state.previewMode === "original";
+  if (isOriginalMode) {
+    renderOriginalDocumentPreview();
+    return;
+  }
   const isSourceMode = state.previewMode === "source";
   if (els.previewTitle) {
     els.previewTitle.textContent = isSourceMode ? "待翻译文献预览" : "译文预览";
@@ -2912,6 +2924,107 @@ function createPdfOverlayPlan(segment, font) {
     cellAlign: segment.layout.cellAlign,
     y,
   };
+}
+
+function renderOriginalDocumentPreview() {
+  if (els.previewTitle) {
+    els.previewTitle.textContent = "原始文献预览";
+  }
+  if (els.previewDownloadButton) els.previewDownloadButton.hidden = true;
+  if (els.previewShareButton) els.previewShareButton.hidden = true;
+  if (els.previewMeta) {
+    els.previewMeta.textContent = state.file
+      ? `${state.file.name} · ${formatBytes(state.file.size)} · 原始文件核对`
+      : "请先选择文献。";
+  }
+  els.previewBody.replaceChildren();
+
+  if (!state.file) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "还没有可预览的原始文献。";
+    els.previewBody.append(empty);
+    return;
+  }
+
+  const url = getOriginalPreviewUrl();
+  if (state.fileType === "pdf") {
+    const panel = document.createElement("section");
+    panel.className = "original-file-panel";
+    const title = document.createElement("h3");
+    title.textContent = "原始 PDF 文件";
+    const message = document.createElement("p");
+    message.textContent = "下方显示的是上传的原始 PDF，用于核对是否为需要翻译的文献。若手机浏览器不显示内嵌 PDF，可直接打开原始文件。";
+    panel.append(title, message, createOriginalFileActions(url));
+    els.previewBody.append(panel);
+
+    const viewer = document.createElement("iframe");
+    viewer.className = "original-pdf-viewer";
+    viewer.title = "原始 PDF 文献预览";
+    viewer.src = url;
+    els.previewBody.append(viewer);
+    return;
+  }
+
+  const panel = document.createElement("section");
+  panel.className = "original-file-panel";
+
+  const title = document.createElement("h3");
+  title.textContent = "浏览器无法完整内嵌预览此格式";
+  const message = document.createElement("p");
+  message.textContent = "DOCX/PPTX 的原始版式需要用 Word、PowerPoint 或 WPS 打开核对。下面提供原始文件入口，并列出已提取的原文片段用于快速确认。";
+
+  panel.append(title, message, createOriginalFileActions(url));
+  els.previewBody.append(panel);
+
+  const groups = groupSegmentsForPreview();
+  groups.slice(0, 8).forEach((group) => {
+    const section = document.createElement("section");
+    section.className = "preview-card";
+    const heading = document.createElement("h3");
+    heading.textContent = group.label;
+    section.append(heading);
+    group.segments.slice(0, 8).forEach((segment) => {
+      const item = document.createElement("article");
+      item.className = "preview-item source";
+      const text = document.createElement("p");
+      text.textContent = segment.original;
+      const meta = document.createElement("span");
+      meta.textContent = "原文片段";
+      item.append(text, meta);
+      section.append(item);
+    });
+    els.previewBody.append(section);
+  });
+}
+
+function createOriginalFileActions(url) {
+  const actions = document.createElement("div");
+  actions.className = "original-file-actions";
+  const openLink = document.createElement("a");
+  openLink.href = url;
+  openLink.target = "_blank";
+  openLink.rel = "noopener";
+  openLink.textContent = "打开原始文件";
+  const downloadLink = document.createElement("a");
+  downloadLink.href = url;
+  downloadLink.download = state.file?.name || "source-document";
+  downloadLink.textContent = "下载原始文件";
+  actions.append(openLink, downloadLink);
+  return actions;
+}
+
+function getOriginalPreviewUrl() {
+  if (!state.originalPreviewUrl && state.file) {
+    state.originalPreviewUrl = URL.createObjectURL(state.file);
+  }
+  return state.originalPreviewUrl;
+}
+
+function revokeOriginalPreviewUrl() {
+  if (!state.originalPreviewUrl) return;
+  URL.revokeObjectURL(state.originalPreviewUrl);
+  state.originalPreviewUrl = "";
 }
 
 function drawPdfOverlayErase(page, plan, rgb) {
@@ -3665,6 +3778,7 @@ async function resetApp(clearInput = true, options = {}) {
   state.pdfBytes = null;
   state.batchFiles = [];
   state.activeSummary = null;
+  revokeOriginalPreviewUrl();
   if (clearInput) els.fileInput.value = "";
   els.fileMeta.textContent = "支持 PPTX / DOCX / PDF；旧版 PPT/DOC 请先另存";
   closePreview();
