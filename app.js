@@ -103,7 +103,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v95";
+const APP_VERSION = "v96";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -2248,7 +2248,7 @@ async function extractSavedPptxTextSections(zip) {
   return sections;
 }
 
-async function createTextPdfBlob({ title, subtitle, sections }) {
+async function createTextPdfBlob({ title, subtitle, sections, showHeader = true }) {
   const { PDFDocument, rgb, fontkit, fontBytes } = await loadPdfExportTools();
   const pdfDoc = await PDFDocument.create();
   pdfDoc.registerFontkit(fontkit);
@@ -2275,9 +2275,11 @@ async function createTextPdfBlob({ title, subtitle, sections }) {
     });
   };
 
-  drawLines(title, 15, 22, rgb(0.05, 0.22, 0.28));
-  drawLines(subtitle, 10, 18, rgb(0.36, 0.42, 0.4));
-  y -= 8;
+  if (showHeader) {
+    drawLines(title, 15, 22, rgb(0.05, 0.22, 0.28));
+    drawLines(subtitle, 10, 18, rgb(0.36, 0.42, 0.4));
+    y -= 8;
+  }
 
   sections.forEach((section) => {
     ensurePage(34);
@@ -3176,7 +3178,7 @@ function renderOriginalOfficePdfPreview(kind) {
   const typeLabel = kind === "pptx" ? "PPTX" : "DOCX";
   const pages = document.createElement("div");
   pages.className = "original-pdf-pages";
-  pages.append(createOriginalPreviewFallback(`正在生成 ${typeLabel} 原文 PDF 预览版...`));
+  pages.append(createOriginalPreviewFallback("正在生成预览..."));
   els.previewBody.append(pages);
 
   createOriginalOfficePreviewPdfBlob(kind)
@@ -3184,13 +3186,13 @@ function renderOriginalOfficePdfPreview(kind) {
     .then((buffer) => renderPdfBytesIntoPreview(
       pages,
       new Uint8Array(buffer),
-      `${typeLabel} PDF 预览版没有可渲染页面。`
+      "没有可渲染页面。"
     ))
     .catch((error) => {
       console.warn("Original Office PDF preview failed", error);
       pages.replaceChildren(
         createOriginalPreviewFallback(
-          `${typeLabel} PDF 预览版生成失败，可回到文件列表后重新选择文件。`
+          "预览生成失败，可回到文件列表后重新选择文件。"
         )
       );
     });
@@ -3210,6 +3212,7 @@ async function createOriginalOfficePreviewPdfBlob(kind) {
     title: state.file?.name || "original-file",
     subtitle: `${kind === "pptx" ? "PPTX" : "DOCX"} 原文 PDF 预览版（文本版）`,
     sections,
+    showHeader: false,
   });
 }
 
