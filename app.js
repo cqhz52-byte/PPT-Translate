@@ -103,7 +103,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v90";
+const APP_VERSION = "v91";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -2987,13 +2987,16 @@ async function renderOriginalPdfPages(container) {
   const pdfjs = await loadPdfJs();
   const pdf = await pdfjs.getDocument({ data: state.pdfBytes.slice() }).promise;
   container.replaceChildren();
+  await waitForUiFrame();
 
-  const scale = isLikelyMobileDevice() ? 1.75 : 1.55;
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const pdfPage = await pdf.getPage(pageNumber);
-    const viewport = pdfPage.getViewport({ scale });
+    const baseViewport = pdfPage.getViewport({ scale: 1 });
+    const metrics = getOriginalPdfPreviewMetrics(container, baseViewport);
+    const viewport = pdfPage.getViewport({ scale: metrics.renderScale });
     const pageShell = document.createElement("section");
     pageShell.className = "original-pdf-page";
+    pageShell.style.width = `${metrics.cssWidth}px`;
 
     const label = document.createElement("span");
     label.textContent = `第 ${pageNumber} 页`;
@@ -3001,7 +3004,9 @@ async function renderOriginalPdfPages(container) {
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
-    canvas.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
+    canvas.style.width = `${metrics.cssWidth}px`;
+    canvas.style.height = `${metrics.cssHeight}px`;
+    canvas.style.aspectRatio = `${baseViewport.width} / ${baseViewport.height}`;
     const context = canvas.getContext("2d", { alpha: false });
     if (!context) throw new Error("Canvas unavailable.");
     context.fillStyle = "#ffffff";
@@ -3016,6 +3021,19 @@ async function renderOriginalPdfPages(container) {
   if (!container.children.length) {
     container.append(createOriginalPreviewFallback("PDF 没有可渲染页面，可使用上方按钮打开或下载原始文件。"));
   }
+}
+
+function getOriginalPdfPreviewMetrics(container, viewport) {
+  const containerWidth = Math.floor(container.getBoundingClientRect().width || container.clientWidth || 0);
+  const bodyWidth = Math.floor(els.previewBody?.getBoundingClientRect().width || 0);
+  const viewportWidth = Math.floor(window.visualViewport?.width || window.innerWidth || 0);
+  const fallbackWidth = Math.max(1, viewportWidth - (isLikelyMobileDevice() ? 20 : 56));
+  const availableWidth = Math.max(1, containerWidth || bodyWidth || fallbackWidth);
+  const cssWidth = Math.floor(Math.min(availableWidth, isLikelyMobileDevice() ? availableWidth : 880));
+  const cssHeight = Math.max(1, Math.round(cssWidth * ((viewport.height || 1) / Math.max(1, viewport.width || 1))));
+  const pixelRatio = Math.max(1, Math.min(window.devicePixelRatio || 1, isLikelyMobileDevice() ? 2.25 : 1.8));
+  const renderScale = (cssWidth / Math.max(1, viewport.width || 1)) * pixelRatio;
+  return { cssWidth, cssHeight, renderScale };
 }
 
 function renderOriginalPptxPreview(url) {
