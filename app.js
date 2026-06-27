@@ -103,7 +103,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v93";
+const APP_VERSION = "v94";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -3339,11 +3339,14 @@ function renderOriginalDocxPreview(url) {
 function createOriginalPreviewPanel(titleText, messageText, url) {
   const panel = document.createElement("section");
   panel.className = "original-file-panel";
+  const copy = document.createElement("div");
+  copy.className = "original-file-copy";
   const title = document.createElement("h3");
   title.textContent = titleText;
   const message = document.createElement("p");
   message.textContent = messageText;
-  panel.append(title, message, createOriginalFileActions(url));
+  copy.append(title, message);
+  panel.append(copy, createOriginalFileActions(url));
   return panel;
 }
 

@@ -1139,35 +1139,61 @@ td:first-child {
 
 .original-file-panel {
   display: grid;
-  gap: 12px;
-  padding: 16px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
 }
 
+.original-file-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
 .original-file-panel h3,
 .original-file-panel p {
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.original-file-panel h3 {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.original-file-panel p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .original-file-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .original-file-actions a {
   display: inline-grid;
   place-items: center;
-  min-height: 38px;
-  padding: 0 12px;
+  min-height: 32px;
+  padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
   color: var(--ink);
+  font-size: 12px;
   font-weight: 800;
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .original-docx-preview {
@@ -1766,7 +1792,26 @@ td:first-child {
   }
 
   .original-file-panel {
-    padding: 12px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .original-file-panel h3 {
+    font-size: 13px;
+  }
+
+  .original-file-panel p {
+    font-size: 11px;
+  }
+
+  .original-file-actions {
+    justify-content: flex-start;
+  }
+
+  .original-file-actions a {
+    min-height: 30px;
+    padding: 0 9px;
   }
 
   .original-pdf-pages {
