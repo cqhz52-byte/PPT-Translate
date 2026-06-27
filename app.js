@@ -103,7 +103,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v96";
+const APP_VERSION = "v97";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -2901,6 +2901,16 @@ function renderPreview() {
 }
 
 async function downloadPdfTranslation() {
+  if (shouldUseDesktopPdfLayoutBackend()) {
+    try {
+      return await downloadPdfTranslationViaLayoutBackend();
+    } catch (error) {
+      console.warn("Desktop PDF layout backend failed; falling back to overlay export", error);
+      setStatus("电脑端布局版导出失败，正在回退到当前 PDF 回写方式...");
+      await waitForUiFrame();
+    }
+  }
+
   setProgress(0.01);
   setStatus("PDF 导出准备中，请稍等...");
   await waitForUiFrame();
@@ -2988,6 +2998,77 @@ async function downloadPdfTranslation() {
   setProgress(1);
   setStatus("PDF 导出完成。");
   return blob;
+}
+
+function shouldUseDesktopPdfLayoutBackend() {
+  if (state.fileType !== "pdf") return false;
+  if (isLikelyMobileDevice()) return false;
+  return true;
+}
+
+async function downloadPdfTranslationViaLayoutBackend() {
+  const payload = createPdfLayoutExportPayload();
+  if (!payload.segments.length) throw new Error("No translated PDF segments for layout export.");
+
+  setProgress(0.08);
+  setStatus("电脑端正在调用本地后端生成 PDF 布局版...");
+  await waitForUiFrame();
+
+  const response = await fetch("./api/pdf-layout-export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `PDF layout backend returned ${response.status}`);
+  }
+
+  setProgress(0.92);
+  setStatus("电脑端 PDF 布局版已生成，正在保存...");
+  await waitForUiFrame();
+  const blob = await response.blob();
+  setProgress(1);
+  setStatus("PDF 布局版导出完成。");
+  return blob;
+}
+
+function createPdfLayoutExportPayload() {
+  const direction = getDirectionConfig(els.translationDirection?.value || "");
+  const pages = [];
+  for (let pageNumber = 1; pageNumber <= Math.max(1, state.slideCount || 0); pageNumber += 1) {
+    const pageSize = state.pdfPageSizes.get(`pdf/page-${pageNumber}`) || {};
+    pages.push({
+      page: pageNumber,
+      width: Number(pageSize.width || 595.28),
+      height: Number(pageSize.height || 841.89),
+    });
+  }
+
+  const segments = state.segments
+    .filter((segment) => segment.type === "pdf" && segment.layout?.bounds && !shouldSkipSegmentForDirection(segment, direction))
+    .map((segment) => ({
+      page: Number(segment.slideNumber || 1),
+      text: getPdfExportText(segment),
+      original: String(segment.original || ""),
+      bounds: {
+        x: Number(segment.layout.bounds.x || 0),
+        y: Number(segment.layout.bounds.y || 0),
+        width: Number(segment.layout.bounds.width || 0),
+        height: Number(segment.layout.bounds.height || 0),
+      },
+      fontSize: Number(segment.layout.fontSize || 0),
+    }))
+    .filter((segment) => segment.text);
+
+  return {
+    filename: buildOutputName(state.file?.name || "translated.pdf"),
+    title: state.file?.name ? `${state.file.name} 译文阅读版` : "PDF译文阅读版",
+    direction: els.translationDirection?.value || "",
+    pages,
+    segments,
+  };
 }
 
 function createPdfOverlayPlan(segment, font) {
