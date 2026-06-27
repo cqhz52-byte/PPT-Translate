@@ -103,7 +103,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v97";
+const APP_VERSION = "v98";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -2901,16 +2901,6 @@ function renderPreview() {
 }
 
 async function downloadPdfTranslation() {
-  if (shouldUseDesktopPdfLayoutBackend()) {
-    try {
-      return await downloadPdfTranslationViaLayoutBackend();
-    } catch (error) {
-      console.warn("Desktop PDF layout backend failed; falling back to overlay export", error);
-      setStatus("电脑端布局版导出失败，正在回退到当前 PDF 回写方式...");
-      await waitForUiFrame();
-    }
-  }
-
   setProgress(0.01);
   setStatus("PDF 导出准备中，请稍等...");
   await waitForUiFrame();
@@ -2956,15 +2946,18 @@ async function downloadPdfTranslation() {
   const font = await pdfDoc.embedFont(fontBytes, { subset: false });
   const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.layout?.bounds);
   const overlayPlans = [];
+  const overlayPlansByPage = new Map();
 
   for (let index = 0; index < translatedSegments.length; index += 1) {
     const segment = translatedSegments[index];
-    const page = pages[Number(segment.slideNumber) - 1];
+    const pageNumber = Number(segment.slideNumber) || 1;
+    const page = pages[pageNumber - 1];
     if (page) {
       const plan = createPdfOverlayPlan(segment, font);
       if (plan) {
-        drawPdfOverlayErase(page, plan, rgb);
-        overlayPlans.push({ page, plan });
+        overlayPlans.push({ page, plan, pageNumber });
+        if (!overlayPlansByPage.has(pageNumber)) overlayPlansByPage.set(pageNumber, []);
+        overlayPlansByPage.get(pageNumber).push(plan);
       }
     }
 
@@ -2975,6 +2968,15 @@ async function downloadPdfTranslation() {
       await waitForUiFrame();
     }
   }
+
+  setProgress(0.84);
+  setStatus("正在按页面统一清空原文正文区域，保留页眉页脚、图片和表格结构...");
+  await waitForUiFrame();
+  pages.forEach((page, index) => {
+    const pageNumber = index + 1;
+    const pageSize = state.pdfPageSizes.get(`pdf/page-${pageNumber}`) || { width: page.getWidth(), height: page.getHeight() };
+    drawPdfPageTextClearRegions(page, overlayPlansByPage.get(pageNumber) || [], pageSize, rgb);
+  });
 
   overlayPlans.forEach(({ page, plan }) => drawPdfOverlayText(page, plan, font, rgb));
 
@@ -2998,77 +3000,6 @@ async function downloadPdfTranslation() {
   setProgress(1);
   setStatus("PDF 导出完成。");
   return blob;
-}
-
-function shouldUseDesktopPdfLayoutBackend() {
-  if (state.fileType !== "pdf") return false;
-  if (isLikelyMobileDevice()) return false;
-  return true;
-}
-
-async function downloadPdfTranslationViaLayoutBackend() {
-  const payload = createPdfLayoutExportPayload();
-  if (!payload.segments.length) throw new Error("No translated PDF segments for layout export.");
-
-  setProgress(0.08);
-  setStatus("电脑端正在调用本地后端生成 PDF 布局版...");
-  await waitForUiFrame();
-
-  const response = await fetch("./api/pdf-layout-export", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(detail || `PDF layout backend returned ${response.status}`);
-  }
-
-  setProgress(0.92);
-  setStatus("电脑端 PDF 布局版已生成，正在保存...");
-  await waitForUiFrame();
-  const blob = await response.blob();
-  setProgress(1);
-  setStatus("PDF 布局版导出完成。");
-  return blob;
-}
-
-function createPdfLayoutExportPayload() {
-  const direction = getDirectionConfig(els.translationDirection?.value || "");
-  const pages = [];
-  for (let pageNumber = 1; pageNumber <= Math.max(1, state.slideCount || 0); pageNumber += 1) {
-    const pageSize = state.pdfPageSizes.get(`pdf/page-${pageNumber}`) || {};
-    pages.push({
-      page: pageNumber,
-      width: Number(pageSize.width || 595.28),
-      height: Number(pageSize.height || 841.89),
-    });
-  }
-
-  const segments = state.segments
-    .filter((segment) => segment.type === "pdf" && segment.layout?.bounds && !shouldSkipSegmentForDirection(segment, direction))
-    .map((segment) => ({
-      page: Number(segment.slideNumber || 1),
-      text: getPdfExportText(segment),
-      original: String(segment.original || ""),
-      bounds: {
-        x: Number(segment.layout.bounds.x || 0),
-        y: Number(segment.layout.bounds.y || 0),
-        width: Number(segment.layout.bounds.width || 0),
-        height: Number(segment.layout.bounds.height || 0),
-      },
-      fontSize: Number(segment.layout.fontSize || 0),
-    }))
-    .filter((segment) => segment.text);
-
-  return {
-    filename: buildOutputName(state.file?.name || "translated.pdf"),
-    title: state.file?.name ? `${state.file.name} 译文阅读版` : "PDF译文阅读版",
-    direction: els.translationDirection?.value || "",
-    pages,
-    segments,
-  };
 }
 
 function createPdfOverlayPlan(segment, font) {
@@ -3131,6 +3062,7 @@ function createPdfOverlayPlan(segment, font) {
     lineHeight,
     textColor,
     cellAlign: segment.layout.cellAlign,
+    isTableLike,
     y,
   };
 }
@@ -3548,6 +3480,124 @@ function drawPdfOverlayErase(page, plan, rgb) {
   });
 }
 
+function drawPdfPageTextClearRegions(page, plans, pageSize, rgb) {
+  const regions = getPdfPageTextClearRegions(plans, pageSize);
+  regions.forEach((region) => {
+    page.drawRectangle({
+      x: region.x,
+      y: region.y,
+      width: region.width,
+      height: region.height,
+      color: rgb(region.color.r, region.color.g, region.color.b),
+      opacity: 1,
+    });
+  });
+}
+
+function getPdfPageTextClearRegions(plans, pageSize) {
+  if (!plans.length) return [];
+
+  const width = Number(pageSize?.width || 595.28);
+  const height = Number(pageSize?.height || 841.89);
+  const normalRects = [];
+  const tableRects = [];
+
+  plans.forEach((plan) => {
+    const erase = plan.erase || {};
+    const rect = normalizePdfClearRect({
+      x: erase.x,
+      y: erase.y,
+      x2: Number(erase.x || 0) + Number(erase.width || 0),
+      y2: Number(erase.y || 0) + Number(erase.height || 0),
+      color: erase.color || { r: 1, g: 1, b: 1 },
+    }, width, height);
+    if (!rect) return;
+    if (plan.isTableLike) {
+      tableRects.push(rect);
+    } else {
+      normalRects.push(rect);
+    }
+  });
+
+  const regions = [];
+  const buckets = new Map();
+  normalRects.forEach((rect) => {
+    const center = (rect.x + rect.x2) / 2;
+    const span = rect.x2 - rect.x;
+    const bucket = span > width * 0.52 ? "full" : center < width * 0.5 ? "left" : "right";
+    if (!buckets.has(bucket)) buckets.set(bucket, []);
+    buckets.get(bucket).push(rect);
+  });
+
+  buckets.forEach((rects, bucket) => {
+    const maxGap = bucket === "full" ? 20 : Math.max(22, height * 0.018);
+    regions.push(...mergePdfClearRects(rects, maxGap, width, height, false));
+  });
+
+  regions.push(...mergePdfClearRects(tableRects, 4, width, height, true));
+  return regions;
+}
+
+function normalizePdfClearRect(rect, pageWidth, pageHeight) {
+  const x = Math.max(0, Math.min(pageWidth, Number(rect.x || 0)));
+  const y = Math.max(0, Math.min(pageHeight, Number(rect.y || 0)));
+  const x2 = Math.max(0, Math.min(pageWidth, Number(rect.x2 || 0)));
+  const y2 = Math.max(0, Math.min(pageHeight, Number(rect.y2 || 0)));
+  if (x2 - x < 1 || y2 - y < 1) return null;
+  return { x, y, x2, y2, color: rect.color || { r: 1, g: 1, b: 1 } };
+}
+
+function mergePdfClearRects(rects, maxGap, pageWidth, pageHeight, isTableRegion) {
+  if (!rects.length) return [];
+  const sorted = [...rects].sort((a, b) => a.y - b.y || a.x - b.x);
+  const merged = [];
+
+  sorted.forEach((rect) => {
+    const current = merged[merged.length - 1];
+    const overlapsHorizontally = current ? rect.x <= current.x2 + Math.max(12, pageWidth * 0.025) && rect.x2 >= current.x - Math.max(12, pageWidth * 0.025) : false;
+    const verticalGap = current ? rect.y - current.y2 : Infinity;
+    if (current && verticalGap <= maxGap && (isTableRegion || overlapsHorizontally)) {
+      current.x = Math.min(current.x, rect.x);
+      current.y = Math.min(current.y, rect.y);
+      current.x2 = Math.max(current.x2, rect.x2);
+      current.y2 = Math.max(current.y2, rect.y2);
+      current.colors.push(rect.color);
+      return;
+    }
+    merged.push({ ...rect, colors: [rect.color] });
+  });
+
+  return merged.map((rect) => {
+    const padding = isTableRegion ? 1.5 : 3;
+    const x = Math.max(0, rect.x - padding);
+    const y = Math.max(0, rect.y - padding);
+    const x2 = Math.min(pageWidth, rect.x2 + padding);
+    const y2 = Math.min(pageHeight, rect.y2 + padding);
+    return {
+      x,
+      y,
+      width: Math.max(1, x2 - x),
+      height: Math.max(1, y2 - y),
+      color: getDominantPdfClearColor(rect.colors),
+    };
+  });
+}
+
+function getDominantPdfClearColor(colors) {
+  if (!colors.length) return { r: 1, g: 1, b: 1 };
+  const counts = new Map();
+  colors.forEach((color) => {
+    const r = Math.round(Math.max(0, Math.min(1, Number(color.r ?? 1))) * 20) / 20;
+    const g = Math.round(Math.max(0, Math.min(1, Number(color.g ?? 1))) * 20) / 20;
+    const b = Math.round(Math.max(0, Math.min(1, Number(color.b ?? 1))) * 20) / 20;
+    const key = `${r}:${g}:${b}`;
+    const current = counts.get(key) || { color: { r, g, b }, count: 0 };
+    current.count += 1;
+    counts.set(key, current);
+  });
+  return [...counts.values()].sort((a, b) => b.count - a.count)[0]?.color || { r: 1, g: 1, b: 1 };
+}
+
 function drawPdfOverlayText(page, plan, font, rgb) {
   let y = plan.y;
 
@@ -3586,7 +3636,31 @@ function getPdfExportText(segment) {
 }
 
 function shouldKeepPdfSourceText(segment) {
-  return Boolean(segment?.layout?.isReferenceText) || isLikelyPdfPublicationFurniture(segment) || isLikelyPdfAuthorByline(segment);
+  return Boolean(segment?.layout?.isReferenceText) ||
+    isLikelyPdfHeaderFooterText(segment) ||
+    isLikelyPdfPublicationFurniture(segment) ||
+    isLikelyPdfAuthorByline(segment);
+}
+
+function isLikelyPdfHeaderFooterText(segment) {
+  if (segment?.type !== "pdf") return false;
+  const text = String(segment.original || "").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+
+  const bounds = segment.layout?.bounds;
+  const pageHeight = state.pdfPageSizes.get(segment.path)?.height || 841.89;
+  if (!bounds || !pageHeight) return false;
+
+  const y = Number(bounds.y || 0);
+  const fontSize = Number(segment.layout?.fontSize || 10);
+  const inHeader = y > pageHeight * 0.925;
+  const inFooter = y < pageHeight * 0.075;
+  if (!inHeader && !inFooter) return false;
+
+  const looksLikePageFurniture = /^[\d\s\-–—]+$/.test(text) ||
+    /(?:doi|www\.|https?:\/\/|copyright|©|page\s+\d+|\d+\s*\/\s*\d+)/i.test(text) ||
+    fontSize <= 10.5;
+  return looksLikePageFurniture;
 }
 
 function isLikelyPdfPublicationFurniture(segment) {
