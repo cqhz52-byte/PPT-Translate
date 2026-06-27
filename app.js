@@ -103,7 +103,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v94";
+const APP_VERSION = "v95";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -3081,7 +3081,7 @@ function renderOriginalDocumentPreview() {
   if (els.previewShareButton) els.previewShareButton.hidden = true;
   if (els.previewMeta) {
     els.previewMeta.textContent = state.file
-      ? `${state.file.name} · ${formatBytes(state.file.size)} · 原始文件核对`
+      ? `${state.file.name} · ${formatBytes(state.file.size)}`
       : "请先选择文献。";
   }
   els.previewBody.replaceChildren();
@@ -3096,17 +3096,17 @@ function renderOriginalDocumentPreview() {
 
   const url = getOriginalPreviewUrl();
   if (state.fileType === "pdf") {
-    renderOriginalPdfPreview(url);
+    renderOriginalPdfPreview();
     return;
   }
 
   if (state.fileType === "pptx") {
-    renderOriginalOfficePdfPreview(url, "pptx");
+    renderOriginalOfficePdfPreview("pptx");
     return;
   }
 
   if (state.fileType === "docx") {
-    renderOriginalOfficePdfPreview(url, "docx");
+    renderOriginalOfficePdfPreview("docx");
     return;
   }
 
@@ -3119,15 +3119,7 @@ function renderOriginalDocumentPreview() {
   );
 }
 
-function renderOriginalPdfPreview(url) {
-  els.previewBody.append(
-    createOriginalPreviewPanel(
-      "原始 PDF 页面预览",
-      "下方使用 PDF.js 逐页渲染上传的原始 PDF，用于核对是否为需要翻译的文献。",
-      url
-    )
-  );
-
+function renderOriginalPdfPreview() {
   const pages = document.createElement("div");
   pages.className = "original-pdf-pages";
   pages.append(createOriginalPreviewFallback("正在渲染 PDF 原始页面..."));
@@ -3135,7 +3127,7 @@ function renderOriginalPdfPreview(url) {
 
   renderOriginalPdfPages(pages).catch((error) => {
     console.warn("Original PDF preview failed", error);
-    pages.replaceChildren(createOriginalPreviewFallback("PDF 页面渲染失败，可使用上方按钮打开或下载原始文件。"));
+    pages.replaceChildren(createOriginalPreviewFallback("PDF 页面渲染失败。"));
   });
 }
 
@@ -3176,20 +3168,12 @@ async function renderOriginalPdfPages(container) {
   }
 
   if (!container.children.length) {
-    container.append(createOriginalPreviewFallback("PDF 没有可渲染页面，可使用上方按钮打开或下载原始文件。"));
+    container.append(createOriginalPreviewFallback("PDF 没有可渲染页面。"));
   }
 }
 
-function renderOriginalOfficePdfPreview(url, kind) {
+function renderOriginalOfficePdfPreview(kind) {
   const typeLabel = kind === "pptx" ? "PPTX" : "DOCX";
-  els.previewBody.append(
-    createOriginalPreviewPanel(
-      `${typeLabel} 原文 PDF 预览版`,
-      "浏览器无法完整复刻 WPS/Office 的分页、图片和复杂版式；下方会把已解析出的原文内容生成 PDF 预览版并逐页渲染，便于在手机端按 PDF 宽度核对内容。",
-      url
-    )
-  );
-
   const pages = document.createElement("div");
   pages.className = "original-pdf-pages";
   pages.append(createOriginalPreviewFallback(`正在生成 ${typeLabel} 原文 PDF 预览版...`));
@@ -3206,7 +3190,7 @@ function renderOriginalOfficePdfPreview(url, kind) {
       console.warn("Original Office PDF preview failed", error);
       pages.replaceChildren(
         createOriginalPreviewFallback(
-          `${typeLabel} PDF 预览版生成失败，可使用上方按钮打开或下载原始文件后用 WPS/Office 查看。`
+          `${typeLabel} PDF 预览版生成失败，可回到文件列表后重新选择文件。`
         )
       );
     });
