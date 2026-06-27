@@ -103,7 +103,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v98";
+const APP_VERSION = "v99";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -2947,6 +2947,7 @@ async function downloadPdfTranslation() {
   const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.layout?.bounds);
   const overlayPlans = [];
   const overlayPlansByPage = new Map();
+  const pagesNeedingTableBorderRepair = new Set();
 
   for (let index = 0; index < translatedSegments.length; index += 1) {
     const segment = translatedSegments[index];
@@ -2958,6 +2959,7 @@ async function downloadPdfTranslation() {
         overlayPlans.push({ page, plan, pageNumber });
         if (!overlayPlansByPage.has(pageNumber)) overlayPlansByPage.set(pageNumber, []);
         overlayPlansByPage.get(pageNumber).push(plan);
+        if (plan.isTableLike) pagesNeedingTableBorderRepair.add(pageNumber);
       }
     }
 
@@ -2983,13 +2985,16 @@ async function downloadPdfTranslation() {
   setProgress(0.9);
   setStatus("正在保存翻译版 PDF，文件较大时可能需要几十秒...");
   await waitForUiFrame();
-  setProgress(0.91);
-  setStatus("正在重新绘制 PDF 表格线，修复文字覆盖造成的断线...");
-  await waitForUiFrame();
-  pages.forEach((page, index) => {
-    const cells = state.pdfTableCells.get(`pdf/page-${index + 1}`) || [];
-    drawPdfTableCellBorders(page, cells, rgb);
-  });
+  if (pagesNeedingTableBorderRepair.size) {
+    setProgress(0.91);
+    setStatus("正在重新绘制 PDF 表格线，修复文字覆盖造成的断线...");
+    await waitForUiFrame();
+    pages.forEach((page, index) => {
+      if (!pagesNeedingTableBorderRepair.has(index + 1)) return;
+      const cells = state.pdfTableCells.get(`pdf/page-${index + 1}`) || [];
+      drawPdfTableCellBorders(page, cells, rgb);
+    });
+  }
 
   setProgress(0.94);
   setStatus("Saving translated PDF. On mobile this may take 30-90 seconds; keep this page open...");
@@ -3530,7 +3535,7 @@ function getPdfPageTextClearRegions(plans, pageSize) {
   });
 
   buckets.forEach((rects, bucket) => {
-    const maxGap = bucket === "full" ? 20 : Math.max(22, height * 0.018);
+    const maxGap = bucket === "full" ? Math.max(24, height * 0.032) : Math.max(34, height * 0.045);
     regions.push(...mergePdfClearRects(rects, maxGap, width, height, false));
   });
 
@@ -3554,7 +3559,8 @@ function mergePdfClearRects(rects, maxGap, pageWidth, pageHeight, isTableRegion)
 
   sorted.forEach((rect) => {
     const current = merged[merged.length - 1];
-    const overlapsHorizontally = current ? rect.x <= current.x2 + Math.max(12, pageWidth * 0.025) && rect.x2 >= current.x - Math.max(12, pageWidth * 0.025) : false;
+    const horizontalTolerance = Math.max(24, pageWidth * 0.05);
+    const overlapsHorizontally = current ? rect.x <= current.x2 + horizontalTolerance && rect.x2 >= current.x - horizontalTolerance : false;
     const verticalGap = current ? rect.y - current.y2 : Infinity;
     if (current && verticalGap <= maxGap && (isTableRegion || overlapsHorizontally)) {
       current.x = Math.min(current.x, rect.x);
@@ -3637,9 +3643,15 @@ function getPdfExportText(segment) {
 
 function shouldKeepPdfSourceText(segment) {
   return Boolean(segment?.layout?.isReferenceText) ||
+    isLikelyPdfTableText(segment) ||
     isLikelyPdfHeaderFooterText(segment) ||
     isLikelyPdfPublicationFurniture(segment) ||
     isLikelyPdfAuthorByline(segment);
+}
+
+function isLikelyPdfTableText(segment) {
+  if (segment?.type !== "pdf") return false;
+  return Boolean(segment.layout?.tableCell);
 }
 
 function isLikelyPdfHeaderFooterText(segment) {
