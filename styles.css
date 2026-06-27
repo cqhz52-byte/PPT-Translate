@@ -1015,6 +1015,21 @@ td:first-child {
   border-bottom: 1px solid var(--line);
 }
 
+.preview-head > div,
+.help-head > div,
+.summary-head > div {
+  min-width: 0;
+}
+
+.preview-head h2,
+.preview-head p,
+.help-head h2,
+.help-head p,
+.summary-head h2,
+.summary-head p {
+  overflow-wrap: anywhere;
+}
+
 .preview-head p:last-child,
 .help-head p:last-child,
 .summary-head p:last-child {
