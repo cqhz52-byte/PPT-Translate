@@ -8,6 +8,7 @@ const state = {
   slideVisuals: new Map(),
   pdfPageSizes: new Map(),
   pdfTableCells: new Map(),
+  pdfTableRegions: new Map(),
   pdfBytes: null,
   batchFiles: [],
   batchRunning: false,
@@ -103,7 +104,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v99";
+const APP_VERSION = "v100";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -512,6 +513,7 @@ async function loadOfficeFile(file, options = {}) {
     state.slideVisuals = new Map();
     state.pdfPageSizes = new Map();
     state.pdfTableCells = new Map();
+    state.pdfTableRegions = new Map();
     state.pdfBytes = null;
 
     if (state.fileType === "pdf") {
@@ -630,8 +632,14 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
       width: viewport.width || 595.28,
       height: viewport.height || 841.89,
     });
-    const tableCells = await extractPdfTableCells(page, pdfjs, viewport).catch(() => []);
+    const tableStructure = await extractPdfTableStructure(page, pdfjs, viewport).catch((error) => {
+      console.warn("PDF table structure extraction failed", error);
+      return { cells: [], regions: [] };
+    });
+    const tableCells = tableStructure.cells || [];
+    const tableRegions = tableStructure.regions || [];
     state.pdfTableCells.set(`pdf/page-${pageNumber}`, tableCells);
+    state.pdfTableRegions.set(`pdf/page-${pageNumber}`, tableRegions);
     const pageSample = await renderPdfPageSample(page).catch((error) => {
       console.warn("PDF background sampling failed", error);
       return null;
@@ -645,8 +653,9 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
     pdfReferenceSectionStarted = pdfReferenceSectionStarted || referenceContext.startedOnPage;
     lines.forEach((line, index) => {
       const tableCell = findPdfTableCell(line.bounds, tableCells);
+      const tableRegion = findPdfTableRegion(line.bounds, tableRegions);
       const sampledBackground = samplePdfBackgroundColor(pageSample, line.bounds, pageWidth, pageHeight);
-      const backgroundColor = normalizePdfBackgroundColor(sampledBackground, Boolean(tableCell));
+      const backgroundColor = normalizePdfBackgroundColor(sampledBackground, Boolean(tableCell || tableRegion));
       state.segments.push({
         id: `pdf-${pageNumber}-${index}`,
         type: "pdf",
@@ -662,6 +671,7 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
           availableHeight: tableCell ? Math.max(line.availableHeight, tableCell.height - 4) : line.availableHeight,
           rowSegmentCount: tableCell ? Math.max(2, line.rowSegmentCount) : line.rowSegmentCount,
           tableCell,
+          tableRegion,
           cellAlign: tableCell ? inferPdfCellAlign(line.bounds, tableCell, line.text) : "",
           backgroundColor,
           textColor: getReadablePdfTextColor(backgroundColor),
@@ -804,9 +814,18 @@ function clampNumber(value, min, max) {
 }
 
 async function extractPdfTableCells(page, pdfjs, viewport) {
+  const structure = await extractPdfTableStructure(page, pdfjs, viewport);
+  return structure.cells;
+}
+
+async function extractPdfTableStructure(page, pdfjs, viewport) {
   const operatorList = await page.getOperatorList();
   const segments = extractPdfVectorSegments(operatorList, pdfjs, viewport);
-  return buildPdfTableCellsFromLines(segments, viewport.width || 595.28, viewport.height || 841.89);
+  const pageWidth = viewport.width || 595.28;
+  const pageHeight = viewport.height || 841.89;
+  const cells = buildPdfTableCellsFromLines(segments, pageWidth, pageHeight);
+  const regions = buildPdfTableRegionsFromLines(segments, cells, pageWidth, pageHeight);
+  return { cells, regions };
 }
 
 function extractPdfVectorSegments(operatorList, pdfjs, viewport) {
@@ -956,6 +975,110 @@ function buildPdfTableCellsFromLines(segments, pageWidth, pageHeight) {
   return mergePdfTableCells(cells);
 }
 
+function buildPdfTableRegionsFromLines(segments, cells, pageWidth, pageHeight) {
+  const candidates = [];
+  const lineComponents = [];
+
+  segments.forEach((segment) => {
+    const horizontal = Math.abs(segment.y1 - segment.y2) <= 1.2;
+    const vertical = Math.abs(segment.x1 - segment.x2) <= 1.2;
+    const rect = {
+      x: segment.x1,
+      y: segment.y1,
+      x2: segment.x2,
+      y2: segment.y2,
+      horizontal,
+      vertical,
+      count: 1,
+      hCount: horizontal ? 1 : 0,
+      vCount: vertical ? 1 : 0,
+    };
+    mergePdfLineRegionIntoComponents(lineComponents, rect, 8);
+  });
+
+  lineComponents.forEach((region) => {
+    const width = region.x2 - region.x;
+    const height = region.y2 - region.y;
+    const denseGrid = region.hCount >= 3 && region.vCount >= 3 && region.count >= 8;
+    const ruledTable = region.hCount >= 5 && width > pageWidth * 0.42 && height > pageHeight * 0.055;
+    const plausibleSize = width > 70 && height > 24 && width < pageWidth * 0.98 && height < pageHeight * 0.86;
+    if ((denseGrid || ruledTable) && plausibleSize) {
+      candidates.push(expandPdfRegion(region, 2, pageWidth, pageHeight));
+    }
+  });
+
+  if (cells.length >= 4) {
+    const cellComponents = [];
+    cells.forEach((cell) => {
+      mergePdfLineRegionIntoComponents(cellComponents, { ...cell, count: 1, hCount: 0, vCount: 0 }, 6);
+    });
+    cellComponents.forEach((region) => {
+      const width = region.x2 - region.x;
+      const height = region.y2 - region.y;
+      if (region.count >= 4 && width > 70 && height > 24) {
+        candidates.push(expandPdfRegion(region, 2, pageWidth, pageHeight));
+      }
+    });
+  }
+
+  return mergePdfTableRegions(candidates, pageWidth, pageHeight);
+}
+
+function mergePdfLineRegionIntoComponents(components, rect, tolerance) {
+  const matches = [];
+  components.forEach((component, index) => {
+    if (pdfRegionsOverlap(component, rect, tolerance)) matches.push(index);
+  });
+
+  if (!matches.length) {
+    components.push({ ...rect });
+    return;
+  }
+
+  const target = components[matches[0]];
+  mergePdfRegion(target, rect);
+  for (let index = matches.length - 1; index >= 1; index -= 1) {
+    const component = components[matches[index]];
+    mergePdfRegion(target, component);
+    components.splice(matches[index], 1);
+  }
+}
+
+function pdfRegionsOverlap(a, b, tolerance = 0) {
+  return b.x <= a.x2 + tolerance &&
+    b.x2 >= a.x - tolerance &&
+    b.y <= a.y2 + tolerance &&
+    b.y2 >= a.y - tolerance;
+}
+
+function mergePdfRegion(target, rect) {
+  target.x = Math.min(target.x, rect.x);
+  target.y = Math.min(target.y, rect.y);
+  target.x2 = Math.max(target.x2, rect.x2);
+  target.y2 = Math.max(target.y2, rect.y2);
+  target.count = Number(target.count || 0) + Number(rect.count || 1);
+  target.hCount = Number(target.hCount || 0) + Number(rect.hCount || 0);
+  target.vCount = Number(target.vCount || 0) + Number(rect.vCount || 0);
+}
+
+function expandPdfRegion(region, padding, pageWidth, pageHeight) {
+  const x = Math.max(0, region.x - padding);
+  const y = Math.max(0, region.y - padding);
+  const x2 = Math.min(pageWidth, region.x2 + padding);
+  const y2 = Math.min(pageHeight, region.y2 + padding);
+  return { x, y, x2, y2, width: x2 - x, height: y2 - y };
+}
+
+function mergePdfTableRegions(regions, pageWidth, pageHeight) {
+  const merged = [];
+  regions
+    .filter((region) => region.width > 1 && region.height > 1)
+    .sort((a, b) => a.y - b.y || a.x - b.x)
+    .forEach((region) => mergePdfLineRegionIntoComponents(merged, region, 8));
+
+  return merged.map((region) => expandPdfRegion(region, 0, pageWidth, pageHeight));
+}
+
 function clusterPdfCoords(values, tolerance = 2) {
   const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
   const clusters = [];
@@ -992,6 +1115,15 @@ function findPdfTableCell(bounds, cells) {
   const cx = bounds.x + bounds.width / 2;
   const cy = bounds.y + bounds.height / 2;
   const candidates = cells.filter((cell) => cx >= cell.x - 1 && cx <= cell.x2 + 1 && cy >= cell.y - 1 && cy <= cell.y2 + 1);
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => a.width * a.height - b.width * b.height)[0];
+}
+
+function findPdfTableRegion(bounds, regions) {
+  if (!regions.length) return null;
+  const cx = bounds.x + bounds.width / 2;
+  const cy = bounds.y + bounds.height / 2;
+  const candidates = regions.filter((region) => cx >= region.x - 2 && cx <= region.x2 + 2 && cy >= region.y - 2 && cy <= region.y2 + 2);
   if (!candidates.length) return null;
   return candidates.sort((a, b) => a.width * a.height - b.width * b.height)[0];
 }
@@ -3651,7 +3783,7 @@ function shouldKeepPdfSourceText(segment) {
 
 function isLikelyPdfTableText(segment) {
   if (segment?.type !== "pdf") return false;
-  return Boolean(segment.layout?.tableCell);
+  return Boolean(segment.layout?.tableCell || segment.layout?.tableRegion);
 }
 
 function isLikelyPdfHeaderFooterText(segment) {
@@ -4413,6 +4545,7 @@ async function resetApp(clearInput = true, options = {}) {
   state.slideVisuals = new Map();
   state.pdfPageSizes = new Map();
   state.pdfTableCells = new Map();
+  state.pdfTableRegions = new Map();
   state.pdfBytes = null;
   state.batchFiles = [];
   state.activeSummary = null;
