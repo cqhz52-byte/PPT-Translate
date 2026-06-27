@@ -1506,6 +1506,25 @@ td:first-child {
     min-width: 0;
   }
 
+  .workspace[data-mobile-view="library"] .sidebar {
+    max-height: calc(100dvh - 150px);
+    overflow: hidden;
+  }
+
+  .workspace[data-mobile-view="library"] .saved-files {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    max-height: calc(100dvh - 178px);
+    overflow: hidden;
+  }
+
+  .workspace[data-mobile-view="library"] .batch-queue,
+  .workspace[data-mobile-view="library"] .saved-file-list {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .pane-back-button {
     display: inline-flex;
     align-items: center;
