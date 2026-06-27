@@ -389,7 +389,6 @@ function adminPage(session) {
           upsertPhoneItem(result.user || { phone: body.phone, enabled: body.enabled, hasPassword: Boolean(body.password) });
           resetForm();
           showError("已保存授权用户。", true);
-          setTimeout(loadPhones, 1800);
         } catch (error) {
           showError(error.message);
         }
@@ -441,7 +440,7 @@ function adminPage(session) {
             await api("/api/admin/phones?phone=" + encodeURIComponent(deletePhone), { method: "DELETE" });
             phoneItems = phoneItems.filter((item) => item.phone !== deletePhone);
             renderPhoneRows();
-            setTimeout(loadPhones, 1200);
+            showError("已删除授权用户。", true);
           } catch (error) {
             showError(error.message);
           }
