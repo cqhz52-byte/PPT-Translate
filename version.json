@@ -1,4 +1,4 @@
 {
-  "version": "v91",
-  "message": "发现新版本 v91：PDF 手机端原文预览改为按弹窗实际宽度渲染，避免页面被横向裁切。"
+  "version": "v92",
+  "message": "发现新版本 v92：文件库新增 PDF/Word/PPT 类型标识；Word/PPT 分享时可生成 PDF 分享版再调用系统分享。"
 }

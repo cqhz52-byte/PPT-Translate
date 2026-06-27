@@ -570,6 +570,13 @@ textarea:focus {
   min-width: 0;
 }
 
+.saved-file-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .saved-file-meta strong,
 .saved-file-meta span {
   overflow: hidden;
@@ -578,6 +585,7 @@ textarea:focus {
 }
 
 .saved-file-meta strong {
+  min-width: 0;
   color: var(--ink);
   font-size: 13px;
 }
@@ -585,6 +593,37 @@ textarea:focus {
 .saved-file-meta span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.file-type-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.file-type-badge.pdf {
+  background: #b42318;
+}
+
+.file-type-badge.docx {
+  background: #1d4ed8;
+}
+
+.file-type-badge.pptx {
+  background: #c2410c;
+}
+
+.file-type-badge.file {
+  background: var(--muted);
 }
 
 .saved-file-actions {

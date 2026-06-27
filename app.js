@@ -103,7 +103,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v91";
+const APP_VERSION = "v92";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -2084,11 +2084,18 @@ function renderSavedFiles() {
 
     const meta = document.createElement("div");
     meta.className = "saved-file-meta";
+    const titleRow = document.createElement("div");
+    titleRow.className = "saved-file-title";
     const name = document.createElement("strong");
     name.textContent = record.filename;
+    const typeBadge = document.createElement("span");
+    const typeInfo = getSavedFileTypeInfo(record);
+    typeBadge.className = `file-type-badge ${typeInfo.kind}`;
+    typeBadge.textContent = typeInfo.label;
+    titleRow.append(name, typeBadge);
     const detail = document.createElement("span");
-    detail.textContent = `${formatBytes(record.size)} · ${formatSavedTime(record.createdAt)}`;
-    meta.append(name, detail);
+    detail.textContent = `${typeInfo.description} · ${formatBytes(record.size)} · ${formatSavedTime(record.createdAt)}`;
+    meta.append(titleRow, detail);
 
     const actions = document.createElement("div");
     actions.className = "saved-file-actions";
@@ -2098,7 +2105,7 @@ function renderSavedFiles() {
     download.addEventListener("click", () => downloadSavedFile(record.id));
     const share = document.createElement("button");
     share.type = "button";
-    share.textContent = "分享";
+    share.textContent = typeInfo.kind === "pdf" ? "分享" : "转PDF分享";
     share.addEventListener("click", () => shareSavedFile(record.id));
     const remove = document.createElement("button");
     remove.type = "button";
@@ -2126,6 +2133,10 @@ async function downloadSavedFile(id) {
 async function shareSavedFile(id) {
   const record = getSavedRecord(id);
   if (!record) return;
+  if (getSavedFileKind(record) !== "pdf") {
+    await shareSavedOfficeAsPdf(record);
+    return;
+  }
   await shareBlobFile(record.blob, record.filename, record.type);
 }
 
@@ -2154,6 +2165,152 @@ async function shareBlobFile(blob, filename, type = "") {
 
   saveBlobAsFile(blob, filename);
   showToast("当前浏览器不支持直接分享文件，已先下载文件。", true);
+}
+
+async function shareSavedOfficeAsPdf(record) {
+  const typeInfo = getSavedFileTypeInfo(record);
+  const confirmed = window.confirm(
+    `${typeInfo.label} 文件在手机微信里通常不能直接作为文件分享。\n\n是否生成一个 PDF 分享版（文本版）并分享？`
+  );
+  if (!confirmed) return;
+
+  try {
+    setBusy(true, `正在生成 ${typeInfo.label} 的 PDF 分享版...`);
+    setStatus("正在提取已保存文件中的译文文本，生成 PDF 分享版...");
+    await waitForUiFrame();
+    const { blob, filename } = await createSavedOfficePdfShareFile(record);
+    await saveGeneratedFile(blob, filename);
+    await shareBlobFile(blob, filename, "application/pdf");
+  } catch (error) {
+    console.error("Office PDF share conversion failed", error);
+    showToast(error.message || "PDF 分享版生成失败，请先下载文件后用 WPS/Office 转成 PDF 再分享。", true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function createSavedOfficePdfShareFile(record) {
+  const kind = getSavedFileKind(record);
+  if (!["docx", "pptx"].includes(kind)) throw new Error("这个文件暂不支持生成 PDF 分享版。");
+
+  const zip = await JSZip.loadAsync(record.blob);
+  const sections = kind === "docx"
+    ? await extractSavedDocxTextSections(zip)
+    : await extractSavedPptxTextSections(zip);
+
+  if (!sections.some((section) => section.lines.length)) {
+    throw new Error("没有提取到可生成 PDF 的文本内容。");
+  }
+
+  const blob = await createTextPdfBlob({
+    title: record.filename,
+    subtitle: `${getSavedFileTypeInfo(record).label} PDF 分享版（文本版）`,
+    sections,
+  });
+
+  return { blob, filename: buildPdfShareFilename(record.filename) };
+}
+
+async function extractSavedDocxTextSections(zip) {
+  const paths = Object.keys(zip.files)
+    .filter((path) => wordPathPattern.test(path))
+    .sort((a, b) => (a === "word/document.xml" ? -1 : b === "word/document.xml" ? 1 : a.localeCompare(b)));
+
+  const sections = [];
+  for (const path of paths) {
+    const xmlText = await zip.file(path)?.async("text");
+    if (!xmlText) continue;
+    const doc = parser.parseFromString(xmlText, "application/xml");
+    const lines = [...doc.getElementsByTagNameNS(WORD_NS, "p")]
+      .map((paragraph) => [...paragraph.getElementsByTagNameNS(WORD_NS, "t")].map((node) => node.textContent || "").join("").trim())
+      .filter(Boolean);
+    if (lines.length) sections.push({ heading: getWordPartLabel(path), lines });
+  }
+  return sections;
+}
+
+async function extractSavedPptxTextSections(zip) {
+  const slideFiles = Object.keys(zip.files)
+    .map((path) => ({ path, match: path.match(slidePathPattern) }))
+    .filter((item) => item.match)
+    .sort((a, b) => Number(a.match[1]) - Number(b.match[1]));
+
+  const sections = [];
+  for (const item of slideFiles) {
+    const xmlText = await zip.file(item.path)?.async("text");
+    if (!xmlText) continue;
+    const doc = parser.parseFromString(xmlText, "application/xml");
+    const lines = [...doc.getElementsByTagNameNS(DRAWING_NS, "p")]
+      .map((paragraph) => [...paragraph.getElementsByTagNameNS(DRAWING_NS, "t")].map((node) => node.textContent || "").join("").trim())
+      .filter(Boolean);
+    if (lines.length) sections.push({ heading: `第 ${Number(item.match[1])} 页`, lines });
+  }
+  return sections;
+}
+
+async function createTextPdfBlob({ title, subtitle, sections }) {
+  const { PDFDocument, rgb, fontkit, fontBytes } = await loadPdfExportTools();
+  const pdfDoc = await PDFDocument.create();
+  pdfDoc.registerFontkit(fontkit);
+  pdfDoc.setTitle(buildPdfShareFilename(title));
+  const font = await pdfDoc.embedFont(fontBytes, { subset: false });
+  const pageWidth = 595.28;
+  const pageHeight = 841.89;
+  const margin = 44;
+  const maxWidth = pageWidth - margin * 2;
+  let page = pdfDoc.addPage([pageWidth, pageHeight]);
+  let y = pageHeight - margin;
+
+  const ensurePage = (needed = 16) => {
+    if (y - needed >= margin) return;
+    page = pdfDoc.addPage([pageWidth, pageHeight]);
+    y = pageHeight - margin;
+  };
+
+  const drawLines = (text, size = 11, lineHeight = 17, color = rgb(0.08, 0.11, 0.12)) => {
+    wrapPdfText(text, font, size, maxWidth).forEach((line) => {
+      ensurePage(lineHeight);
+      if (line) page.drawText(line, { x: margin, y, size, font, color });
+      y -= lineHeight;
+    });
+  };
+
+  drawLines(title, 15, 22, rgb(0.05, 0.22, 0.28));
+  drawLines(subtitle, 10, 18, rgb(0.36, 0.42, 0.4));
+  y -= 8;
+
+  sections.forEach((section) => {
+    ensurePage(34);
+    drawLines(section.heading, 12, 20, rgb(0.08, 0.34, 0.43));
+    section.lines.forEach((line) => drawLines(line, 10.5, 16));
+    y -= 8;
+  });
+
+  const bytes = await pdfDoc.save();
+  return new Blob([bytes], { type: "application/pdf" });
+}
+
+function buildPdfShareFilename(filename) {
+  return String(filename || "translated-file")
+    .replace(/\.(pptx|docx|pdf)$/i, "")
+    .replace(/[\\/:*?"<>|]+/g, "_") + "-PDF分享版.pdf";
+}
+
+function getSavedFileKind(record) {
+  const filename = String(record?.filename || "").toLowerCase();
+  const type = String(record?.type || "").toLowerCase();
+  if (filename.endsWith(".pdf") || type.includes("pdf")) return "pdf";
+  if (filename.endsWith(".docx") || type.includes("wordprocessingml")) return "docx";
+  if (filename.endsWith(".pptx") || type.includes("presentationml")) return "pptx";
+  return "file";
+}
+
+function getSavedFileTypeInfo(record) {
+  const kind = getSavedFileKind(record);
+  if (kind === "pdf") return { kind, label: "PDF", description: "可直接分享" };
+  if (kind === "docx") return { kind, label: "Word", description: "可转 PDF 分享" };
+  if (kind === "pptx") return { kind, label: "PPT", description: "可转 PDF 分享" };
+  return { kind, label: "文件", description: "保存文件" };
 }
 
 function openSavedFilesDb() {
