@@ -103,7 +103,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v92";
+const APP_VERSION = "v93";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -3101,12 +3101,12 @@ function renderOriginalDocumentPreview() {
   }
 
   if (state.fileType === "pptx") {
-    renderOriginalPptxPreview(url);
+    renderOriginalOfficePdfPreview(url, "pptx");
     return;
   }
 
   if (state.fileType === "docx") {
-    renderOriginalDocxPreview(url);
+    renderOriginalOfficePdfPreview(url, "docx");
     return;
   }
 
@@ -3177,6 +3177,95 @@ async function renderOriginalPdfPages(container) {
 
   if (!container.children.length) {
     container.append(createOriginalPreviewFallback("PDF 没有可渲染页面，可使用上方按钮打开或下载原始文件。"));
+  }
+}
+
+function renderOriginalOfficePdfPreview(url, kind) {
+  const typeLabel = kind === "pptx" ? "PPTX" : "DOCX";
+  els.previewBody.append(
+    createOriginalPreviewPanel(
+      `${typeLabel} 原文 PDF 预览版`,
+      "浏览器无法完整复刻 WPS/Office 的分页、图片和复杂版式；下方会把已解析出的原文内容生成 PDF 预览版并逐页渲染，便于在手机端按 PDF 宽度核对内容。",
+      url
+    )
+  );
+
+  const pages = document.createElement("div");
+  pages.className = "original-pdf-pages";
+  pages.append(createOriginalPreviewFallback(`正在生成 ${typeLabel} 原文 PDF 预览版...`));
+  els.previewBody.append(pages);
+
+  createOriginalOfficePreviewPdfBlob(kind)
+    .then((blob) => blob.arrayBuffer())
+    .then((buffer) => renderPdfBytesIntoPreview(
+      pages,
+      new Uint8Array(buffer),
+      `${typeLabel} PDF 预览版没有可渲染页面。`
+    ))
+    .catch((error) => {
+      console.warn("Original Office PDF preview failed", error);
+      pages.replaceChildren(
+        createOriginalPreviewFallback(
+          `${typeLabel} PDF 预览版生成失败，可使用上方按钮打开或下载原始文件后用 WPS/Office 查看。`
+        )
+      );
+    });
+}
+
+async function createOriginalOfficePreviewPdfBlob(kind) {
+  if (!state.zip) throw new Error("Missing Office document data.");
+  const sections = kind === "docx"
+    ? await extractSavedDocxTextSections(state.zip)
+    : await extractSavedPptxTextSections(state.zip);
+
+  if (!sections.some((section) => section.lines.length)) {
+    throw new Error("No extractable text for Office PDF preview.");
+  }
+
+  return createTextPdfBlob({
+    title: state.file?.name || "original-file",
+    subtitle: `${kind === "pptx" ? "PPTX" : "DOCX"} 原文 PDF 预览版（文本版）`,
+    sections,
+  });
+}
+
+async function renderPdfBytesIntoPreview(container, pdfBytes, emptyMessage) {
+  const pdfjs = await loadPdfJs();
+  const pdf = await pdfjs.getDocument({ data: pdfBytes }).promise;
+  container.replaceChildren();
+  await waitForUiFrame();
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const pdfPage = await pdf.getPage(pageNumber);
+    const baseViewport = pdfPage.getViewport({ scale: 1 });
+    const metrics = getOriginalPdfPreviewMetrics(container, baseViewport);
+    const viewport = pdfPage.getViewport({ scale: metrics.renderScale });
+    const pageShell = document.createElement("section");
+    pageShell.className = "original-pdf-page";
+    pageShell.style.width = `${metrics.cssWidth}px`;
+
+    const label = document.createElement("span");
+    label.textContent = `第 ${pageNumber} 页`;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    canvas.style.width = `${metrics.cssWidth}px`;
+    canvas.style.height = `${metrics.cssHeight}px`;
+    canvas.style.aspectRatio = `${baseViewport.width} / ${baseViewport.height}`;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("Canvas unavailable.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    pageShell.append(label, canvas);
+    container.append(pageShell);
+    await pdfPage.render({ canvasContext: context, viewport }).promise;
+    await waitForUiFrame();
+  }
+
+  if (!container.children.length) {
+    container.append(createOriginalPreviewFallback(emptyMessage));
   }
 }
 

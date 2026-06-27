@@ -1,4 +1,4 @@
 {
-  "version": "v92",
-  "message": "发现新版本 v92：文件库新增 PDF/Word/PPT 类型标识；Word/PPT 分享时可生成 PDF 分享版再调用系统分享。"
+  "version": "v93",
+  "message": "发现新版本 v93：Word/PPTX 原始文件预览改为生成 PDF 预览版（文本版）并逐页渲染，和 PDF 预览体验一致。"
 }
