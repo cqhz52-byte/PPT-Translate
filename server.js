@@ -1,14 +1,11 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
-const crypto = require("crypto");
-const { spawn } = require("child_process");
 
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT || 5173);
 const HOST = process.env.HOST || "0.0.0.0";
-const MAX_BODY_BYTES = 24 * 1024 * 1024;
+const MAX_BODY_BYTES = 1024 * 1024;
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -35,11 +32,6 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && req.url === "/api/translate") {
       await handleTranslate(req, res);
-      return;
-    }
-
-    if (req.method === "POST" && req.url === "/api/pdf-layout-export") {
-      await handlePdfLayoutExport(req, res);
       return;
     }
 
@@ -113,83 +105,6 @@ async function handleTranslate(req, res) {
   const data = await response.json();
   sendJson(res, 200, {
     translation: data.choices?.[0]?.message?.content?.trim() || "",
-  });
-}
-
-async function handlePdfLayoutExport(req, res) {
-  const body = await readJson(req);
-  const segments = Array.isArray(body.segments) ? body.segments : [];
-  if (!segments.length) {
-    sendJson(res, 400, { error: "缺少可导出的 PDF 译文段落。" });
-    return;
-  }
-
-  const jobId = `ppt-translate-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
-  const jobDir = path.join(os.tmpdir(), jobId);
-  fs.mkdirSync(jobDir, { recursive: true });
-  const inputPath = path.join(jobDir, "payload.json");
-  const outputPath = path.join(jobDir, "translated-layout.pdf");
-  fs.writeFileSync(inputPath, JSON.stringify(body), "utf8");
-
-  try {
-    await runPythonScript(path.join(ROOT, "scripts", "build-translated-pdf-layout.py"), ["--input", inputPath, "--output", outputPath]);
-    const filename = sanitizeDownloadName(body.filename || "translated-layout.pdf").replace(/\.pdf$/i, "") + "-layout.pdf";
-    await sendBinaryFile(res, outputPath, "application/pdf", filename);
-  } finally {
-    fs.rm(jobDir, { recursive: true, force: true }, () => {});
-  }
-}
-
-function runPythonScript(scriptPath, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn("python", [scriptPath, ...args], {
-      cwd: ROOT,
-      windowsHide: true,
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve(stdout);
-        return;
-      }
-      reject(new Error(stderr.trim() || stdout.trim() || `Python exited with code ${code}`));
-    });
-  });
-}
-
-function sanitizeDownloadName(value) {
-  return String(value || "translated-layout.pdf")
-    .replace(/[\\/:*?"<>|]+/g, "_")
-    .trim() || "translated-layout.pdf";
-}
-
-function sendBinaryFile(res, filePath, type, filename) {
-  return new Promise((resolve, reject) => {
-    fs.stat(filePath, (statError, stat) => {
-      if (statError || !stat.isFile()) {
-        reject(statError || new Error("Output file missing"));
-        return;
-      }
-      res.writeHead(200, {
-        "Content-Type": type,
-        "Content-Length": stat.size,
-        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
-        "Cache-Control": "no-store",
-        "Access-Control-Allow-Origin": "*",
-      });
-      const stream = fs.createReadStream(filePath);
-      stream.on("error", reject);
-      stream.on("end", resolve);
-      stream.pipe(res);
-    });
   });
 }
 
