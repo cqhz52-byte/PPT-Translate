@@ -58,6 +58,7 @@ const els = {
   helpButton: document.querySelector("#helpButton"),
   helpDialog: document.querySelector("#helpDialog"),
   helpCloseButton: document.querySelector("#helpCloseButton"),
+  appShareButton: document.querySelector("#appShareButton"),
   adminButton: document.querySelector("#adminButton"),
   libraryButton: document.querySelector("#libraryButton"),
   workspace: document.querySelector("#workspace"),
@@ -104,7 +105,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v103";
+const APP_VERSION = "v104";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -452,6 +453,7 @@ els.shareButton.addEventListener("click", sharePresentation);
 els.resetButton.addEventListener("click", handleResetButtonClick);
 els.helpButton?.addEventListener("click", openHelp);
 els.helpCloseButton?.addEventListener("click", closeHelp);
+els.appShareButton?.addEventListener("click", shareApp);
 els.adminButton?.addEventListener("click", openAdminManagement);
 els.previewCloseButton.addEventListener("click", closePreview);
 els.previewDownloadButton.addEventListener("click", downloadPresentation);
@@ -2834,6 +2836,30 @@ function closeHelp() {
     els.helpDialog.close();
   } else {
     els.helpDialog.removeAttribute("open");
+  }
+}
+
+async function shareApp() {
+  const url = new URL(window.location.href);
+  url.hash = "";
+  const shareUrl = url.toString();
+  const title = "CuraWay 文档翻译工具";
+  const text = "打开 CuraWay 文档翻译工具";
+
+  try {
+    if (navigator.share) {
+      await navigator.share({ title, text, url: shareUrl });
+      setStatus("已打开 App 分享面板。");
+      return;
+    }
+
+    await navigator.clipboard.writeText(shareUrl);
+    showCompletionDialog("App 链接已复制", "已复制当前 App 链接，可以粘贴到微信或浏览器发送。");
+    setStatus("App 链接已复制。");
+  } catch (error) {
+    console.warn("App share failed", error);
+    showCompletionDialog("无法自动分享", `请手动复制当前链接：${shareUrl}`);
+    setStatus("App 分享未完成。");
   }
 }
 
