@@ -58,6 +58,7 @@ const els = {
   helpButton: document.querySelector("#helpButton"),
   helpDialog: document.querySelector("#helpDialog"),
   helpCloseButton: document.querySelector("#helpCloseButton"),
+  adminButton: document.querySelector("#adminButton"),
   libraryButton: document.querySelector("#libraryButton"),
   workspace: document.querySelector("#workspace"),
   mobileViewButton: document.querySelector("#mobileViewButton"),
@@ -103,7 +104,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v101";
+const APP_VERSION = "v102";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -451,6 +452,7 @@ els.shareButton.addEventListener("click", sharePresentation);
 els.resetButton.addEventListener("click", handleResetButtonClick);
 els.helpButton?.addEventListener("click", openHelp);
 els.helpCloseButton?.addEventListener("click", closeHelp);
+els.adminButton?.addEventListener("click", openAdminManagement);
 els.previewCloseButton.addEventListener("click", closePreview);
 els.previewDownloadButton.addEventListener("click", downloadPresentation);
 els.previewShareButton.addEventListener("click", sharePresentation);
@@ -2833,6 +2835,34 @@ function closeHelp() {
   } else {
     els.helpDialog.removeAttribute("open");
   }
+}
+
+async function openAdminManagement() {
+  setStatus("正在检查用户管理后台...");
+  try {
+    const response = await fetch("/api/admin/session", {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+
+    if (response.status === 404 || response.status === 405) {
+      showAdminUnavailableDialog();
+      return;
+    }
+
+    window.location.href = "/admin";
+  } catch (error) {
+    console.warn("Admin backend check failed", error);
+    showAdminUnavailableDialog();
+  }
+}
+
+function showAdminUnavailableDialog() {
+  showCompletionDialog(
+    "用户管理未启用",
+    "当前访问的部署没有 /admin 管理后台。请使用已启用 Cloudflare Pages Functions 的地址，或让管理员绑定 PHONE_AUTH_KV 后重新部署。"
+  );
+  setStatus("当前部署未启用用户管理后台。");
 }
 
 function renderPreview() {
