@@ -104,7 +104,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v102";
+const APP_VERSION = "v103";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -2859,10 +2859,10 @@ async function openAdminManagement() {
 
 function showAdminUnavailableDialog() {
   showCompletionDialog(
-    "用户管理未启用",
-    "当前访问的部署没有 /admin 管理后台。请使用已启用 Cloudflare Pages Functions 的地址，或让管理员绑定 PHONE_AUTH_KV 后重新部署。"
+    "请打开 Cloudflare 正式地址",
+    "用户管理依赖 Cloudflare Pages Functions 和 PHONE_AUTH_KV。当前地址没有检测到后台接口，请在新手机上打开已部署到 Cloudflare 的正式链接。"
   );
-  setStatus("当前部署未启用用户管理后台。");
+  setStatus("当前地址不是可用的 Cloudflare 用户管理后台。");
 }
 
 function renderPreview() {
@@ -5402,7 +5402,7 @@ function showCompletionDialog(title, message) {
     <form method="dialog" class="completion-card">
       <h2></h2>
       <p></p>
-      <button class="primary" value="ok">???</button>
+      <button class="primary" value="ok">我知道了</button>
     </form>
   `;
   dialog.querySelector("h2").textContent = title;
