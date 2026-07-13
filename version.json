@@ -1,4 +1,4 @@
 {
-  "version": "v104",
-  "message": "发现新版本 v104：顶部新增 App 一键分享按钮，手机可直接调起系统分享面板。"
+  "version": "v105",
+  "message": "发现新版本 v105：新增 Cloudflare 后端 PDF 结构化解析、管理员 LlamaParse Key 管理，以及 PDF 重排版/原位覆盖双导出模式。"
 }

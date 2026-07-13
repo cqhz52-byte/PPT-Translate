@@ -35,6 +35,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && req.url === "/api/pdf-parse") {
+      sendJson(res, 501, { error: "本地开发服务器未实现 PDF 后端解析；部署到 Cloudflare 并配置 LLAMAPARSE_API_KEY 后启用。" });
+      return;
+    }
+
     if (req.method === "GET" || req.method === "HEAD") {
       serveStatic(req, res);
       return;

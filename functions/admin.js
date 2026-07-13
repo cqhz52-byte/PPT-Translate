@@ -112,6 +112,19 @@ function adminPage(session) {
       </section>
 
       <section class="panel">
+        <h2>LlamaParse PDF 解析 Key</h2>
+        <p class="panel-copy" id="llamaparseKeyStatus">正在检查 Key 状态...</p>
+        <form id="llamaparseKeyForm" class="key-form">
+          <label>LlamaParse / LlamaCloud API Key <input name="apiKey" type="password" autocomplete="off" placeholder="输入后保存到 Cloudflare KV，仅后端解析 PDF 使用"></label>
+          <div class="form-actions">
+            <button type="submit">保存 Key</button>
+            <button class="ghost" id="clearLlamaparseKeyButton" type="button">清除 Key</button>
+          </div>
+          <div class="error" id="llamaparseKeyError"></div>
+        </form>
+      </section>
+
+      <section class="panel">
         <h2 id="adminFormTitle">添加超级管理员</h2>
         <p class="panel-copy">最多可设置 2 个超级管理员。第二个超级管理员必须由已登录的超级管理员添加。</p>
         <form id="adminForm" class="user-form">
@@ -201,6 +214,9 @@ function adminPage(session) {
       const deepseekKeyForm = document.querySelector("#deepseekKeyForm");
       const deepseekKeyStatus = document.querySelector("#deepseekKeyStatus");
       const deepseekKeyError = document.querySelector("#deepseekKeyError");
+      const llamaparseKeyForm = document.querySelector("#llamaparseKeyForm");
+      const llamaparseKeyStatus = document.querySelector("#llamaparseKeyStatus");
+      const llamaparseKeyError = document.querySelector("#llamaparseKeyError");
       let phoneItems = [];
       let adminItems = [];
 
@@ -220,6 +236,12 @@ function adminPage(session) {
         deepseekKeyError.textContent = message || "";
         deepseekKeyError.style.display = message ? "block" : "none";
         deepseekKeyError.classList.toggle("success", Boolean(isSuccess));
+      }
+
+      function showLlamaparseKeyError(message, isSuccess = false) {
+        llamaparseKeyError.textContent = message || "";
+        llamaparseKeyError.style.display = message ? "block" : "none";
+        llamaparseKeyError.classList.toggle("success", Boolean(isSuccess));
       }
 
       function escapeHtml(value) {
@@ -269,6 +291,21 @@ function adminPage(session) {
           }
         } catch (error) {
           deepseekKeyStatus.textContent = error.message || "Key 状态读取失败。";
+        }
+      }
+
+      async function loadLlamaparseKeyStatus() {
+        try {
+          const data = await api("/api/admin/llamaparse-key");
+          if (data.hasKey) {
+            llamaparseKeyStatus.textContent = data.source === "cloudflare-secret"
+              ? "已配置 Cloudflare Pages Secret：LLAMAPARSE_API_KEY。"
+              : "已保存 LlamaParse Key 到 Cloudflare KV，PDF 会优先使用后端结构化解析。";
+          } else {
+            llamaparseKeyStatus.textContent = "尚未配置 LlamaParse Key；PDF 会回退浏览器兼容解析，扫描版/OCR 效果有限。";
+          }
+        } catch (error) {
+          llamaparseKeyStatus.textContent = error.message || "Key 状态读取失败。";
         }
       }
 
@@ -500,12 +537,38 @@ function adminPage(session) {
           showDeepseekKeyError(error.message);
         }
       });
+      llamaparseKeyForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const apiKey = String(new FormData(llamaparseKeyForm).get("apiKey") || "").trim();
+        try {
+          await api("/api/admin/llamaparse-key", {
+            method: "POST",
+            body: JSON.stringify({ apiKey })
+          });
+          llamaparseKeyForm.reset();
+          showLlamaparseKeyError("LlamaParse Key 已保存。", true);
+          await loadLlamaparseKeyStatus();
+        } catch (error) {
+          showLlamaparseKeyError(error.message);
+        }
+      });
+      document.querySelector("#clearLlamaparseKeyButton").addEventListener("click", async () => {
+        if (!confirm("确定清除 Cloudflare KV 中保存的 LlamaParse Key 吗？")) return;
+        try {
+          await api("/api/admin/llamaparse-key", { method: "DELETE" });
+          showLlamaparseKeyError("LlamaParse Key 已清除。", true);
+          await loadLlamaparseKeyStatus();
+        } catch (error) {
+          showLlamaparseKeyError(error.message);
+        }
+      });
       document.querySelector("#logoutButton").addEventListener("click", async () => {
         await fetch("/api/auth/logout", { method: "POST" });
         location.href = "/admin";
       });
 
       loadDeepseekKeyStatus();
+      loadLlamaparseKeyStatus();
       loadAdmins();
       loadPhones();
     </script>
