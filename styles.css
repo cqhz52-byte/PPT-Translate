@@ -390,6 +390,14 @@ h2 {
   background: rgba(228, 240, 243, 0.56);
 }
 
+.pdf-output-setting {
+  display: grid;
+}
+
+body:not(.has-pdf-file) .pdf-output-setting {
+  opacity: 0.58;
+}
+
 label {
   display: grid;
   gap: 6px;

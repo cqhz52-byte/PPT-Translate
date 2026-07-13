@@ -135,6 +135,13 @@
               DeepSeek API Key
               <input id="apiKey" type="password" placeholder="可留空，优先使用 Cloudflare 后端 Key">
             </label>
+            <label class="pdf-output-setting" id="pdfOutputSetting">
+              PDF 导出模式
+              <select id="pdfOutputMode">
+                <option value="reflow">推荐：重排版译文 PDF</option>
+                <option value="overlay">兼容：原 PDF 原位覆盖</option>
+              </select>
+            </label>
           </div>
 
           <div class="actions mobile-view-pane" data-mobile-pane="translate">
@@ -291,7 +298,7 @@
               <li>支持中文、英文、日文、韩文、法文、德文、西班牙文等多语种目标语言。</li>
               <li>支持一次选择多个文件，使用“批量翻译并保存”顺序处理。</li>
               <li>PPTX 预览里可拖动文本框、调整大小、切换单行/换行和单段字号。</li>
-              <li>PDF 会尽量保留页面背景、图片、表格线，并在原文字位置覆盖写入译文。</li>
+              <li>PDF 优先使用 Cloudflare 后端解析；可导出重排版译文 PDF，也可切换为原 PDF 原位覆盖兼容版。</li>
               <li>生成后的文件会进入“文件库”，可再次下载、分享或删除。</li>
             </ul>
           </section>

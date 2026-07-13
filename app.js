@@ -9,6 +9,9 @@ const state = {
   pdfPageSizes: new Map(),
   pdfTableCells: new Map(),
   pdfBytes: null,
+  pdfParseSource: "",
+  pdfParsedMarkdown: "",
+  pdfParsedPages: [],
   batchFiles: [],
   batchRunning: false,
   batchCancelRequested: false,
@@ -79,6 +82,7 @@ const els = {
   fontScaleValue: document.querySelector("#fontScaleValue"),
   modelName: document.querySelector("#modelName"),
   apiKey: document.querySelector("#apiKey"),
+  pdfOutputMode: document.querySelector("#pdfOutputMode"),
   slideCount: document.querySelector("#slideCount"),
   segmentCount: document.querySelector("#segmentCount"),
   translatedCount: document.querySelector("#translatedCount"),
@@ -111,6 +115,7 @@ const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
 const DEEPSEEK_API_BASE = "https://api.deepseek.com";
 const TRANSLATE_PROXY = "./api/translate";
+const PDF_PARSE_PROXY = "./api/pdf-parse";
 const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const PDFLIB_URLS = [
@@ -472,6 +477,7 @@ els.helpDialog?.addEventListener("click", (event) => {
   els.summaryDetail,
   els.modelName,
   els.apiKey,
+  els.pdfOutputMode,
 ].forEach((element) => {
   element?.addEventListener("change", handleSettingsChange);
   element?.addEventListener("input", handleSettingsChange);
@@ -517,6 +523,10 @@ async function loadOfficeFile(file, options = {}) {
     state.pdfPageSizes = new Map();
     state.pdfTableCells = new Map();
     state.pdfBytes = null;
+    state.pdfParseSource = "";
+    state.pdfParsedMarkdown = "";
+    state.pdfParsedPages = [];
+    document.body.classList.toggle("has-pdf-file", state.fileType === "pdf");
 
     if (state.fileType === "pdf") {
       await loadPdfDocument(file, loadToken);
@@ -540,7 +550,10 @@ async function loadOfficeFile(file, options = {}) {
     renderSegments();
     updateStats();
     els.fileMeta.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`;
-    setStatus(`已解析 ${getFileTypeName()}，共 ${state.segments.length} 段文字。默认使用 DeepSeek 翻译。`);
+    const pdfSourceLabel = state.fileType === "pdf"
+      ? (state.pdfParseSource === "llamaparse" ? "（Cloudflare + LlamaParse 结构化解析）" : "（浏览器兼容解析）")
+      : "";
+    setStatus(`已解析 ${getFileTypeName()}${pdfSourceLabel}，共 ${state.segments.length} 段文字。默认使用 DeepSeek 翻译。`);
     if (!options.skipDraftSave) scheduleCurrentDraftSave({ immediate: true });
     if (!silent) showToast(`${getFileTypeName()} 已载入，可以开始翻译或手动编辑。`);
   } catch (error) {
@@ -619,11 +632,34 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
   const pdf = await pdfjs.getDocument({ data: pdfBytes }).promise;
   if (state.loadToken !== loadToken) return;
   state.slideCount = pdf.numPages;
+  state.pdfParseSource = "pdfjs";
+  state.pdfParsedMarkdown = "";
+  state.pdfParsedPages = [];
+
+  let parsed = null;
+  try {
+    setProgress(0.04);
+    setStatus("正在调用 Cloudflare 后端解析 PDF，支持 OCR、表格和段落结构...");
+    await waitForUiFrame();
+    parsed = await parsePdfWithBackend(file);
+    if (state.loadToken !== loadToken) return;
+    if (parsed?.markdown || parsed?.pages?.length) {
+      state.pdfParseSource = parsed.source || "llamaparse";
+      state.pdfParsedMarkdown = parsed.markdown || "";
+      state.pdfParsedPages = parsed.pages || [];
+    }
+  } catch (error) {
+    console.warn("Backend PDF parsing unavailable; falling back to pdf.js", error);
+    if (state.loadToken !== loadToken) return;
+    setStatus(`后端 PDF 解析不可用，已回退浏览器兼容解析：${error.message || "未知错误"}`);
+    await waitForUiFrame();
+  }
+
   let pdfReferenceSectionStarted = false;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     if (state.loadToken !== loadToken) return;
-    setProgress(pdf.numPages ? pageNumber / pdf.numPages : 0);
+    setProgress(0.08 + (pdf.numPages ? pageNumber / pdf.numPages : 0) * 0.7);
     setStatus(`正在解析 PDF 第 ${pageNumber}/${pdf.numPages} 页，提取文字和页面背景...`);
     await waitForUiFrame();
     if (state.loadToken !== loadToken) return;
@@ -678,9 +714,183 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
     });
   }
 
-  if (!state.segments.length) {
-    throw new Error("这个 PDF 没有可提取的文本。若是扫描版 PDF，需要先 OCR 后再翻译。");
+  const structuredSegments = createPdfStructuredSegmentsFromLlamaParse();
+  if (structuredSegments.length) {
+    state.segments = structuredSegments;
+    state.pdfParseSource = state.pdfParseSource || "llamaparse";
+    setStatus(`已使用 Cloudflare 后端解析 PDF，识别到 ${structuredSegments.length} 个结构化段落。`);
   }
+
+  if (!state.segments.length) {
+    throw new Error("这个 PDF 没有可提取的文本。若是扫描版 PDF，请确认 Cloudflare 已配置 LLAMAPARSE_API_KEY 后再试。");
+  }
+}
+
+async function parsePdfWithBackend(file) {
+  const form = new FormData();
+  form.append("file", file, file.name || "document.pdf");
+  const response = await fetch(PDF_PARSE_PROXY, {
+    method: "POST",
+    body: form,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || `PDF 后端解析失败：${response.status}`);
+  }
+  return data;
+}
+
+function createPdfStructuredSegmentsFromLlamaParse() {
+  const fromPages = createPdfSegmentsFromParsedPages(state.pdfParsedPages);
+  if (fromPages.length) return fromPages;
+  return createPdfSegmentsFromMarkdown(state.pdfParsedMarkdown);
+}
+
+function createPdfSegmentsFromParsedPages(pages) {
+  const segments = [];
+  (pages || []).forEach((page, pageIndex) => {
+    const pageNumber = Number(page.page || page.page_number || page.pageNumber || pageIndex + 1);
+    const pageSize = state.pdfPageSizes.get(`pdf/page-${pageNumber}`) || { width: 595.28, height: 841.89 };
+    const items = Array.isArray(page.items) ? page.items : (Array.isArray(page.elements) ? page.elements : []);
+    items.forEach((item, itemIndex) => {
+      const text = normalizePdfParsedText(item.text || item.value || item.md || item.markdown || "");
+      if (!isUsefulPdfParsedText(text)) return;
+      const bounds = normalizeParsedPdfBounds(item, pageSize);
+      segments.push(createPdfParsedSegment({
+        id: `pdf-llama-${pageNumber}-${itemIndex}`,
+        pageNumber,
+        index: itemIndex,
+        text,
+        bounds,
+        itemType: String(item.type || item.category || ""),
+      }));
+    });
+
+    if (!items.length) {
+      splitParsedMarkdownIntoBlocks(page.md || page.markdown || page.text || "").forEach((text, blockIndex) => {
+        segments.push(createPdfParsedSegment({
+          id: `pdf-llama-${pageNumber}-${blockIndex}`,
+          pageNumber,
+          index: blockIndex,
+          text,
+          bounds: null,
+          itemType: "",
+        }));
+      });
+    }
+  });
+  return segments.slice(0, 1200);
+}
+
+function createPdfSegmentsFromMarkdown(markdown) {
+  return splitParsedMarkdownIntoBlocks(markdown).slice(0, 1200).map((text, index) => {
+    const pageNumber = inferParsedMarkdownPage(index);
+    return createPdfParsedSegment({
+      id: `pdf-llama-md-${index}`,
+      pageNumber,
+      index,
+      text,
+      bounds: null,
+      itemType: "",
+    });
+  });
+}
+
+function createPdfParsedSegment({ id, pageNumber, index, text, bounds, itemType }) {
+  const pagePath = `pdf/page-${pageNumber}`;
+  const pageSize = state.pdfPageSizes.get(pagePath) || { width: 595.28, height: 841.89 };
+  const tableCell = bounds ? findPdfTableCell(bounds, state.pdfTableCells.get(pagePath) || []) : null;
+  const backgroundColor = { r: 1, g: 1, b: 1 };
+  return {
+    id,
+    type: "pdf",
+    slideNumber: pageNumber,
+    locationLabel: `第 ${pageNumber} 页`,
+    path: pagePath,
+    paragraphIndex: index,
+    textNodeCount: 1,
+    layout: {
+      bounds,
+      fontSize: inferParsedPdfFontSize(text, itemType),
+      availableWidth: bounds?.width || pageSize.width - 72,
+      availableHeight: bounds?.height || 80,
+      rowSegmentCount: tableCell ? 2 : 1,
+      tableCell,
+      cellAlign: tableCell && bounds ? inferPdfCellAlign(bounds, tableCell, text) : "",
+      backgroundColor,
+      textColor: getReadablePdfTextColor(backgroundColor),
+      isReferenceText: isPdfReferencesHeading(text) || isLikelyPdfReferenceCitationLine(text),
+      source: "llamaparse",
+      itemType,
+    },
+    overrides: createSegmentOverrides(),
+    original: text,
+    translation: "",
+  };
+}
+
+function splitParsedMarkdownIntoBlocks(markdown) {
+  return String(markdown || "")
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}/)
+    .map(normalizePdfParsedText)
+    .filter(isUsefulPdfParsedText);
+}
+
+function normalizePdfParsedText(text) {
+  return String(text || "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function isUsefulPdfParsedText(text) {
+  const clean = String(text || "").replace(/[#*_`|:-]/g, "").replace(/\s+/g, "");
+  return clean.length >= 2;
+}
+
+function inferParsedMarkdownPage(index) {
+  const pageCount = Math.max(1, state.slideCount || 1);
+  return Math.min(pageCount, Math.max(1, Math.floor(index / 12) + 1));
+}
+
+function inferParsedPdfFontSize(text, itemType) {
+  if (/title|heading/i.test(itemType)) return 14;
+  if (/table/i.test(itemType)) return 9;
+  return String(text || "").length > 180 ? 10 : 11;
+}
+
+function normalizeParsedPdfBounds(item, pageSize) {
+  const raw = item.bbox || item.bounding_box || item.boundingBox || item.bBox || item.bounds;
+  if (!raw) return null;
+  const box = Array.isArray(raw)
+    ? { x: raw[0], y: raw[1], width: raw[2] - raw[0], height: raw[3] - raw[1] }
+    : {
+        x: raw.x ?? raw.left ?? raw.l,
+        y: raw.y ?? raw.top ?? raw.t,
+        width: raw.width ?? raw.w ?? ((raw.right ?? raw.r) - (raw.x ?? raw.left ?? raw.l)),
+        height: raw.height ?? raw.h ?? ((raw.bottom ?? raw.b) - (raw.y ?? raw.top ?? raw.t)),
+      };
+  const x = Number(box.x);
+  const y = Number(box.y);
+  const width = Number(box.width);
+  const height = Number(box.height);
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+
+  const looksNormalized = Math.max(x + width, y + height) <= 1.5;
+  const scaled = looksNormalized
+    ? { x: x * pageSize.width, y: y * pageSize.height, width: width * pageSize.width, height: height * pageSize.height }
+    : { x, y, width, height };
+
+  const topOrigin = Boolean(item.bbox || item.bounding_box || item.boundingBox || item.bBox);
+  return {
+    x: clampNumber(scaled.x, 0, pageSize.width),
+    y: topOrigin
+      ? clampNumber(pageSize.height - scaled.y - scaled.height, 0, pageSize.height)
+      : clampNumber(scaled.y, 0, pageSize.height),
+    width: clampNumber(scaled.width, 1, pageSize.width),
+    height: clampNumber(scaled.height, 1, pageSize.height),
+  };
 }
 
 async function loadPdfJs() {
@@ -2957,6 +3167,164 @@ function renderPreview() {
 }
 
 async function downloadPdfTranslation() {
+  const mode = els.pdfOutputMode?.value || "reflow";
+  if (mode === "overlay") return downloadPdfOverlayTranslation();
+  return downloadPdfReflowTranslation();
+}
+
+async function downloadPdfReflowTranslation() {
+  setProgress(0.01);
+  setStatus("正在生成重排版译文 PDF...");
+  await waitForUiFrame();
+
+  const { PDFDocument, rgb, fontkit, fontBytes } = await loadPdfExportTools();
+  const pdfDoc = await PDFDocument.create();
+  pdfDoc.registerFontkit(fontkit);
+  pdfDoc.setTitle(`${state.file.name} translated reflow`);
+  const font = await pdfDoc.embedFont(fontBytes, { subset: false });
+
+  const pageWidth = 595.28;
+  const pageHeight = 841.89;
+  const margin = 42;
+  const contentWidth = pageWidth - margin * 2;
+  let page = pdfDoc.addPage([pageWidth, pageHeight]);
+  let y = pageHeight - margin;
+
+  page.drawText(stripPdfExtension(state.file?.name || "Translated PDF"), {
+    x: margin,
+    y,
+    size: 15,
+    font,
+    color: rgb(0.06, 0.08, 0.09),
+  });
+  y -= 24;
+
+  const meta = state.pdfParseSource === "llamaparse"
+    ? "Parsed by Cloudflare + LlamaParse, translated by DeepSeek"
+    : "Parsed by browser compatible mode, translated by DeepSeek";
+  page.drawText(meta, {
+    x: margin,
+    y,
+    size: 8.5,
+    font,
+    color: rgb(0.38, 0.44, 0.42),
+  });
+  y -= 26;
+
+  const segments = state.segments.filter((segment) => segment.type === "pdf" && String(segment.translation || "").trim());
+  if (!segments.length) throw new Error("没有可导出的 PDF 译文。");
+
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    const source = normalizePdfParsedText(segment.original);
+    const translation = getPdfExportText(segment) || normalizePdfParsedText(segment.translation);
+    if (!translation) continue;
+
+    const block = createPdfReflowBlock(segment, source, translation, font, contentWidth);
+    if (y - block.height < margin) {
+      page = pdfDoc.addPage([pageWidth, pageHeight]);
+      y = pageHeight - margin;
+    }
+
+    y = drawPdfReflowBlock(page, block, margin, y, font, rgb);
+
+    if (index % 10 === 0 || index === segments.length - 1) {
+      setProgress(0.12 + ((index + 1) / segments.length) * 0.72);
+      setStatus(`正在排版重排版 PDF：${index + 1}/${segments.length}`);
+      await waitForUiFrame();
+    }
+  }
+
+  setProgress(0.92);
+  setStatus("正在保存重排版译文 PDF...");
+  await waitForUiFrame();
+  const pdfBytes = await pdfDoc.save();
+  const blob = new Blob([pdfBytes], { type: "application/pdf" });
+  setProgress(1);
+  setStatus("PDF 重排版导出完成。");
+  return blob;
+}
+
+function createPdfReflowBlock(segment, source, translation, font, width) {
+  const isHeading = /heading|title/i.test(segment.layout?.itemType || "") || /^#{1,4}\s+/.test(source);
+  const isTable = looksLikeMarkdownTable(source) || looksLikeMarkdownTable(translation);
+  const fontSize = isHeading ? 13 : 10.5;
+  const sourceSize = 7.4;
+  const labelHeight = 12;
+  const translationLines = isTable
+    ? wrapMarkdownTableForPdf(translation, font, fontSize, width)
+    : wrapPdfText(stripMarkdownDecorations(translation), font, fontSize, width);
+  const sourceLines = wrapPdfText(stripMarkdownDecorations(source), font, sourceSize, width);
+  const lineHeight = fontSize * 1.38;
+  const sourceLineHeight = sourceSize * 1.35;
+  const height = labelHeight + translationLines.length * lineHeight + Math.min(4, sourceLines.length) * sourceLineHeight + 18;
+  return { segment, isHeading, translationLines, sourceLines: sourceLines.slice(0, 4), fontSize, sourceSize, lineHeight, sourceLineHeight, height };
+}
+
+function drawPdfReflowBlock(page, block, x, y, font, rgb) {
+  page.drawText(block.segment.locationLabel || "", {
+    x,
+    y,
+    size: 7,
+    font,
+    color: rgb(0.48, 0.53, 0.5),
+  });
+  y -= 12;
+
+  block.translationLines.forEach((line) => {
+    page.drawText(line, {
+      x,
+      y,
+      size: block.fontSize,
+      font,
+      color: rgb(0.06, 0.08, 0.09),
+    });
+    y -= block.lineHeight;
+  });
+
+  if (block.sourceLines.length) {
+    y -= 2;
+    block.sourceLines.forEach((line) => {
+      page.drawText(line, {
+        x,
+        y,
+        size: block.sourceSize,
+        font,
+        color: rgb(0.46, 0.5, 0.49),
+      });
+      y -= block.sourceLineHeight;
+    });
+  }
+
+  return y - 12;
+}
+
+function looksLikeMarkdownTable(text) {
+  const lines = String(text || "").split(/\r\n|\r|\n/);
+  return lines.length >= 2 && lines.some((line) => /\|/.test(line)) && lines.some((line) => /^\s*\|?\s*:?-{3,}/.test(line));
+}
+
+function wrapMarkdownTableForPdf(text, font, fontSize, maxWidth) {
+  return String(text || "")
+    .split(/\r\n|\r|\n/)
+    .filter((line) => !/^\s*\|?\s*:?-{3,}/.test(line))
+    .flatMap((line) => wrapPdfText(line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").replace(/\s*\|\s*/g, "  |  "), font, fontSize, maxWidth));
+}
+
+function stripMarkdownDecorations(text) {
+  return String(text || "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .trim();
+}
+
+function stripPdfExtension(name) {
+  return String(name || "").replace(/\.pdf$/i, "");
+}
+
+async function downloadPdfOverlayTranslation() {
   setProgress(0.01);
   setStatus("PDF 导出准备中，请稍等...");
   await waitForUiFrame();
@@ -3001,6 +3369,9 @@ async function downloadPdfTranslation() {
   await waitForUiFrame();
   const font = await pdfDoc.embedFont(fontBytes, { subset: false });
   const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.layout?.bounds);
+  if (!translatedSegments.length) {
+    throw new Error("当前 PDF 段落没有可用于原位覆盖的坐标。请使用“推荐：重排版译文 PDF”，或关闭后端结构化解析后重新导入。");
+  }
   const overlayPlans = [];
 
   for (let index = 0; index < translatedSegments.length; index += 1) {
@@ -4328,11 +4699,15 @@ async function resetApp(clearInput = true, options = {}) {
   state.pdfPageSizes = new Map();
   state.pdfTableCells = new Map();
   state.pdfBytes = null;
+  state.pdfParseSource = "";
+  state.pdfParsedMarkdown = "";
+  state.pdfParsedPages = [];
   state.batchFiles = [];
   state.activeSummary = null;
   revokeOriginalPreviewUrl();
   if (clearInput) els.fileInput.value = "";
   els.fileMeta.textContent = "支持 PPTX / DOCX / PDF；旧版 PPT/DOC 请先另存";
+  document.body.classList.remove("has-pdf-file");
   closePreview();
   renderSegments();
   renderBatchQueue();
@@ -4346,7 +4721,10 @@ async function resetApp(clearInput = true, options = {}) {
 }
 
 function buildOutputName(name) {
-  if (state.fileType === "pdf") return name.replace(/\.pdf$/i, "") + "-translated.pdf";
+  if (state.fileType === "pdf") {
+    const mode = els.pdfOutputMode?.value === "overlay" ? "overlay" : "reflow";
+    return name.replace(/\.pdf$/i, "") + `-translated-${mode}.pdf`;
+  }
   return name.replace(/\.(pptx|docx)$/i, "") + `-translated.${state.fileType || "pptx"}`;
 }
 
@@ -5202,6 +5580,7 @@ function loadSettings() {
     setElementValue(els.summaryDetail, settings.summaryDetail);
     setElementValue(els.modelName, settings.modelName);
     setElementValue(els.apiKey, settings.apiKey);
+    setElementValue(els.pdfOutputMode, settings.pdfOutputMode);
     updateFontScaleLabel();
   } catch {
     localStorage.removeItem(SETTINGS_KEY);
@@ -5217,6 +5596,7 @@ function saveSettings() {
     summaryDetail: els.summaryDetail?.value || "standard",
     modelName: els.modelName?.value || "",
     apiKey: els.apiKey?.value || "",
+    pdfOutputMode: els.pdfOutputMode?.value || "reflow",
   };
 
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
