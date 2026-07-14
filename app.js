@@ -110,7 +110,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v109";
+const APP_VERSION = "v110";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -167,6 +167,7 @@ if ("serviceWorker" in navigator) {
 }
 
 initUpdateChecks();
+decorateActionButtons();
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && document.body.classList.contains("is-busy")) {
@@ -462,8 +463,8 @@ els.helpCloseButton?.addEventListener("click", closeHelp);
 els.appShareButton?.addEventListener("click", shareApp);
 els.adminButton?.addEventListener("click", openAdminManagement);
 els.previewCloseButton.addEventListener("click", closePreview);
-els.previewDownloadButton.addEventListener("click", downloadPresentation);
-els.previewShareButton.addEventListener("click", sharePresentation);
+els.previewDownloadButton.addEventListener("click", handlePreviewDownload);
+els.previewShareButton.addEventListener("click", handlePreviewShare);
 els.previewDialog.addEventListener("click", (event) => {
   if (event.target === els.previewDialog) closePreview();
 });
@@ -2930,6 +2931,47 @@ async function sharePresentation() {
   }
 }
 
+async function shareOriginalFile() {
+  if (!state.file) return;
+
+  try {
+    setBusy(true, "正在准备原始文件分享...");
+    await waitForUiFrame();
+    const file = new File([state.file], state.file.name || "source-document", {
+      type: state.file.type || getOriginalMimeType(),
+    });
+
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: state.file.name || "原始文献",
+        text: "CuraWay 文档翻译工具中的原始文献",
+      });
+      showToast("已打开原始文件分享面板。");
+      return;
+    }
+
+    saveBlobAsFile(state.file, state.file.name || "source-document");
+    showToast("当前浏览器不支持直接分享原始文件，已先下载原始文件。", true);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      showToast("已取消分享。");
+    } else {
+      console.error("Original file share failed", error);
+      showToast(error.message || "原始文件分享失败。", true);
+    }
+  } finally {
+    setBusy(false);
+  }
+}
+
+function getOriginalMimeType() {
+  if (state.fileType === "pdf") return "application/pdf";
+  if (state.fileType === "docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (state.fileType === "pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  return state.file?.type || "application/octet-stream";
+}
+
 async function generateTranslatedFile() {
   if (!state.file) throw new Error("请先选择文件。");
 
@@ -3048,15 +3090,24 @@ function renderSavedFiles() {
     actions.className = "saved-file-actions";
     const download = document.createElement("button");
     download.type = "button";
+    download.className = "saved-download-action";
+    download.dataset.icon = "download";
     download.textContent = "下载";
+    decorateButtonIcon(download);
     download.addEventListener("click", () => downloadSavedFile(record.id));
     const share = document.createElement("button");
     share.type = "button";
+    share.className = "saved-share-action";
+    share.dataset.icon = "share";
     share.textContent = typeInfo.kind === "pdf" ? "分享" : "转PDF分享";
+    decorateButtonIcon(share);
     share.addEventListener("click", () => shareSavedFile(record.id));
     const remove = document.createElement("button");
     remove.type = "button";
+    remove.className = "saved-remove-action";
+    remove.dataset.icon = "trash";
     remove.textContent = "删除";
+    decorateButtonIcon(remove);
     remove.addEventListener("click", () => deleteSavedFile(record.id));
     actions.append(download, share, remove);
 
@@ -3687,7 +3738,7 @@ function setBusy(isBusy, message = "") {
 
 function updateTranslateButtonState(effectiveBusy = false) {
   const canStop = state.translationRunning;
-  els.translateButton.textContent = canStop ? "停止翻译" : "自动翻译";
+  setButtonLabel(els.translateButton, canStop ? "停止翻译" : "自动翻译");
   els.translateButton.classList.toggle("danger-action", canStop);
   els.translateButton.disabled = canStop ? false : effectiveBusy || !state.segments.length;
 }
@@ -3755,6 +3806,21 @@ function openPreviewDialog() {
   }
 }
 
+function handlePreviewDownload() {
+  if (state.previewMode === "original") {
+    if (state.file) saveBlobAsFile(state.file, state.file.name || "source-document");
+    return;
+  }
+  downloadPresentation();
+}
+
+function handlePreviewShare() {
+  if (state.previewMode === "original") {
+    return shareOriginalFile();
+  }
+  return sharePresentation();
+}
+
 function closePreview() {
   if (typeof els.previewDialog.close === "function" && els.previewDialog.open) {
     els.previewDialog.close();
@@ -3806,6 +3872,62 @@ async function shareApp() {
   }
 }
 
+function decorateActionButtons() {
+  [
+    [els.batchTranslateButton, "layers"],
+    [els.sourcePreviewButton, "file-search"],
+    [els.translateButton, "spark"],
+    [els.summaryButton, "list"],
+    [els.previewButton, "layout"],
+    [els.layoutPreviewButton, "layout"],
+    [els.shareButton, "share"],
+    [els.previewShareButton, "share"],
+    [els.previewDownloadButton, "download"],
+  ].forEach(([button, icon]) => {
+    if (!button) return;
+    button.dataset.icon = button.dataset.icon || icon;
+    decorateButtonIcon(button);
+  });
+}
+
+function decorateButtonIcon(button) {
+  if (!button || button.querySelector(".button-label")) return;
+  const text = button.textContent.trim();
+  button.textContent = "";
+  const icon = document.createElement("span");
+  icon.className = "button-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = getButtonIconSvg(button.dataset.icon || "spark");
+  const label = document.createElement("span");
+  label.className = "button-label";
+  label.textContent = text;
+  button.append(icon, label);
+}
+
+function setButtonLabel(button, text) {
+  if (!button) return;
+  const label = button.querySelector(".button-label");
+  if (label) {
+    label.textContent = text;
+  } else {
+    button.textContent = text;
+  }
+}
+
+function getButtonIconSvg(name) {
+  const icons = {
+    share: '<svg viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/></svg>',
+    download: '<svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
+    spark: '<svg viewBox="0 0 24 24"><path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z"/></svg>',
+    "file-search": '<svg viewBox="0 0 24 24"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h7"/><path d="M14 2v6h6"/><path d="M20 11V8l-6-6"/><circle cx="16.5" cy="16.5" r="3.5"/><path d="m19 19 2 2"/></svg>',
+    layout: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M9 10v10"/></svg>',
+    list: '<svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>',
+    layers: '<svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg>',
+    trash: '<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>',
+  };
+  return icons[name] || icons.spark;
+}
+
 async function openAdminManagement() {
   setStatus("正在检查用户管理后台...");
   try {
@@ -3847,8 +3969,13 @@ function renderPreview() {
   if (els.previewTitle) {
     els.previewTitle.textContent = isSourceMode ? "待翻译文献预览" : "译文预览";
   }
-  if (els.previewDownloadButton) els.previewDownloadButton.hidden = isSourceMode;
-  if (els.previewShareButton) els.previewShareButton.hidden = isSourceMode;
+  if (els.previewDownloadButton) els.previewDownloadButton.hidden = true;
+  if (els.previewShareButton) {
+    els.previewShareButton.hidden = isSourceMode;
+    setButtonLabel(els.previewShareButton, "分享翻译文件");
+    els.previewShareButton.dataset.icon = "share";
+    decorateButtonIcon(els.previewShareButton);
+  }
   els.previewMeta.textContent = isSourceMode
     ? `${getFileTypeName()} · ${state.segments.length} 段原文 · 翻译前预览`
     : `${getFileTypeName()} · ${state.segments.length} 段文字 · ${translated} 段已有译文`;
@@ -4396,7 +4523,13 @@ function renderOriginalDocumentPreview() {
     els.previewTitle.textContent = "原始文献预览";
   }
   if (els.previewDownloadButton) els.previewDownloadButton.hidden = true;
-  if (els.previewShareButton) els.previewShareButton.hidden = true;
+  if (els.previewShareButton) {
+    els.previewShareButton.hidden = false;
+    els.previewShareButton.disabled = !state.file;
+    setButtonLabel(els.previewShareButton, "分享原始文件");
+    els.previewShareButton.dataset.icon = "share";
+    decorateButtonIcon(els.previewShareButton);
+  }
   if (els.previewMeta) {
     els.previewMeta.textContent = state.file
       ? `${state.file.name} · ${formatBytes(state.file.size)}`

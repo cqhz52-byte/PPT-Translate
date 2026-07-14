@@ -17,7 +17,7 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="CuraWay">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v109 · PDF 重建修复</p>
+            <p class="version">v110 · 分享体验优化</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -145,13 +145,13 @@
           </div>
 
           <div class="actions mobile-view-pane" data-mobile-pane="translate">
-            <button id="batchTranslateButton" type="button" disabled>批量翻译并保存</button>
-            <button id="sourcePreviewButton" type="button" disabled>预览原始文献</button>
-            <button id="translateButton" class="primary" type="button" disabled>自动翻译</button>
-            <button id="summaryButton" type="button" disabled>总结文献主要内容</button>
-            <button id="previewButton" type="button" disabled>版式预览/调整</button>
-            <button id="downloadButton" type="button" disabled>导出翻译文件</button>
-            <button id="shareButton" type="button" disabled>分享翻译文件</button>
+            <button id="batchTranslateButton" class="action-button batch-action" type="button" disabled>批量翻译并保存</button>
+            <button id="sourcePreviewButton" class="action-button source-action" type="button" disabled>预览原始文献</button>
+            <button id="translateButton" class="primary action-button translate-action" type="button" disabled>自动翻译</button>
+            <button id="summaryButton" class="action-button summary-action" type="button" disabled>总结文献主要内容</button>
+            <button id="previewButton" class="action-button preview-action" type="button" disabled>版式预览/调整</button>
+            <button id="downloadButton" class="action-button hidden-action" type="button" disabled hidden>导出翻译文件</button>
+            <button id="shareButton" class="action-button share-action" type="button" disabled>分享翻译文件</button>
           </div>
 
           <section class="saved-files mobile-view-pane" data-mobile-pane="library" aria-label="已保存翻译文件">
@@ -191,7 +191,7 @@
               <p id="statusText">请先选择一个 PPTX、DOCX 或 PDF 文件。</p>
             </div>
             <div class="panel-actions">
-              <button id="layoutPreviewButton" type="button" disabled>版式预览/调整</button>
+              <button id="layoutPreviewButton" class="action-button preview-action compact-action" type="button" disabled>版式预览/调整</button>
             </div>
             <div class="status-visual" id="statusVisual" aria-hidden="true">
               <span class="status-ring"></span>
@@ -236,8 +236,8 @@
             <p id="previewMeta">按页面/部件预览最终写入文件的文字。</p>
           </div>
           <div class="preview-actions">
-            <button id="previewDownloadButton" class="primary" type="button" disabled>导出文件</button>
-            <button id="previewShareButton" type="button" disabled>分享文件</button>
+            <button id="previewDownloadButton" class="action-button hidden-action" type="button" disabled hidden>导出文件</button>
+            <button id="previewShareButton" class="action-button share-action" type="button" disabled>分享文件</button>
             <button class="icon-button" id="previewCloseButton" type="button" title="关闭预览" aria-label="关闭预览">
               <span aria-hidden="true">×</span>
             </button>

@@ -53,6 +53,57 @@ button {
   cursor: pointer;
 }
 
+.action-button,
+.primary.action-button,
+.saved-file-actions button,
+.preview-actions button:not(.icon-button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 800;
+  line-height: 1;
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.action-button:hover:not(:disabled),
+.saved-file-actions button:hover:not(:disabled),
+.preview-actions button:not(.icon-button):hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(20, 35, 32, 0.12);
+}
+
+.button-icon {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+}
+
+.button-icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.button-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hidden-action[hidden] {
+  display: none !important;
+}
+
 button:hover:not(:disabled) {
   border-color: var(--accent);
 }
@@ -651,11 +702,66 @@ textarea:focus {
   font-size: 12px;
 }
 
+.saved-download-action {
+  background: #f5faf9;
+  border-color: #c8d9d4;
+  color: #24534a;
+}
+
+.saved-share-action {
+  background: #16805d;
+  border-color: #16805d;
+  color: #fff;
+}
+
+.saved-remove-action {
+  background: #fff1f0;
+  border-color: #f0b8b2;
+  color: var(--danger);
+}
+
 .primary {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
   font-weight: 800;
+}
+
+.translate-action {
+  background: #165a72;
+  border-color: #165a72;
+  color: #fff;
+}
+
+.source-action,
+.preview-action {
+  background: #e8f4f6;
+  border-color: #8fb9c2;
+  color: #114d61;
+}
+
+.summary-action {
+  background: #fff4df;
+  border-color: #e0ad62;
+  color: #7c3f13;
+}
+
+.batch-action {
+  background: #eef4f2;
+  border-color: #b6cbc4;
+  color: #21443c;
+}
+
+.share-action {
+  background: #16805d;
+  border-color: #16805d;
+  color: #fff;
+}
+
+.compact-action {
+  min-height: 38px;
+  padding-inline: 12px;
+  font-size: 13px;
 }
 
 .danger-action {
