@@ -10,6 +10,8 @@ const state = {
   pdfTableCells: new Map(),
   pdfEraseFragments: new Map(),
   pdfPreservedRegions: new Map(),
+  pdfManualPreservedRegions: new Map(),
+  pdfManualRegionSelectionEnabled: false,
   pdfBytes: null,
   pdfParseSource: "",
   pdfParsedMarkdown: "",
@@ -114,7 +116,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v120";
+const APP_VERSION = "v121";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -624,6 +626,8 @@ async function loadOfficeFile(file, options = {}) {
     state.pdfTableCells = new Map();
     state.pdfEraseFragments = new Map();
     state.pdfPreservedRegions = new Map();
+    state.pdfManualPreservedRegions = new Map();
+    state.pdfManualRegionSelectionEnabled = false;
     state.pdfBytes = null;
     state.pdfParseSource = "";
     state.pdfParsedMarkdown = "";
@@ -1597,7 +1601,7 @@ async function drawPdfPreservedPageFurniture(sourcePage, targetPage, pdfDoc, pag
 }
 
 async function drawPdfPreservedRegions(sourcePage, targetPage, pdfDoc, pagePath, pageSize, options = {}) {
-  const regions = state.pdfPreservedRegions.get(pagePath) || [];
+  const regions = getPdfPreservedRegionsForPage(pagePath);
   if (!regions.length) return;
   const pageWidth = Number(pageSize.width || 595.28);
   const pageHeight = Number(pageSize.height || 841.89);
@@ -1612,6 +1616,18 @@ async function drawPdfPreservedRegions(sourcePage, targetPage, pdfDoc, pagePath,
       height: region.height,
     });
   }
+}
+
+function getPdfPreservedRegionsForPage(pagePath) {
+  const manualRegions = state.pdfManualPreservedRegions.get(pagePath) || [];
+  const automaticRegions = state.pdfPreservedRegions.get(pagePath) || [];
+  const effectiveAutomaticRegions = manualRegions.length
+    ? automaticRegions.filter((region) => region.kind !== "figure")
+    : automaticRegions;
+  return [
+    ...effectiveAutomaticRegions,
+    ...manualRegions,
+  ];
 }
 
 async function renderPdfPageCropToPng(sourcePage, bounds, pageWidth, pageHeight, options = {}) {
@@ -4336,6 +4352,8 @@ async function releaseScreenWakeLock() {
 }
 
 function openPreview() {
+  state.pdfManualRegionSelectionEnabled = false;
+  updatePdfRegionSelectionControls();
   state.previewMode = "translation";
   renderPreview();
   openPreviewDialog();
@@ -4371,6 +4389,8 @@ function handlePreviewShare() {
 }
 
 function closePreview() {
+  state.pdfManualRegionSelectionEnabled = false;
+  updatePdfRegionSelectionControls();
   if (typeof els.previewDialog.close === "function" && els.previewDialog.open) {
     els.previewDialog.close();
   } else {
@@ -5182,6 +5202,8 @@ function renderOriginalDocumentPreview() {
 }
 
 function renderOriginalPdfPreview() {
+  els.previewBody.append(createPdfRegionSelectionPanel());
+
   const pages = document.createElement("div");
   pages.className = "original-pdf-pages";
   pages.append(createOriginalPreviewFallback("正在渲染 PDF 原始页面..."));
@@ -5208,9 +5230,15 @@ async function renderOriginalPdfPages(container) {
     const pageShell = document.createElement("section");
     pageShell.className = "original-pdf-page";
     pageShell.style.width = `${metrics.cssWidth}px`;
+    pageShell.dataset.pagePath = `pdf/page-${pageNumber}`;
 
     const label = document.createElement("span");
     label.textContent = `第 ${pageNumber} 页`;
+
+    const frame = document.createElement("div");
+    frame.className = "original-pdf-page-frame";
+    frame.style.width = `${metrics.cssWidth}px`;
+    frame.style.height = `${metrics.cssHeight}px`;
 
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
@@ -5223,15 +5251,236 @@ async function renderOriginalPdfPages(container) {
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, canvas.width, canvas.height);
 
-    pageShell.append(label, canvas);
+    const selectionLayer = createPdfRegionSelectionLayer({
+      pagePath: `pdf/page-${pageNumber}`,
+      pageWidth: baseViewport.width,
+      pageHeight: baseViewport.height,
+      cssWidth: metrics.cssWidth,
+      cssHeight: metrics.cssHeight,
+    });
+    frame.append(canvas, selectionLayer);
+    pageShell.append(label, frame);
     container.append(pageShell);
     await pdfPage.render({ canvasContext: context, viewport }).promise;
+    renderPdfManualRegionBoxes(selectionLayer);
     await waitForUiFrame();
   }
 
   if (!container.children.length) {
     container.append(createOriginalPreviewFallback("PDF 没有可渲染页面。"));
   }
+}
+
+function createPdfRegionSelectionPanel() {
+  const panel = document.createElement("section");
+  panel.className = "pdf-region-tool";
+
+  const copy = document.createElement("div");
+  copy.className = "pdf-region-tool-copy";
+  const title = document.createElement("h3");
+  title.textContent = "图片原样复制区域";
+  const detail = document.createElement("p");
+  detail.textContent = "点击“开始框选”后，在页面上拖出需要原样保留的图片/图题区域；同一页有手动框选时，会优先使用手动框，不再自动整块保留图区。";
+  const count = document.createElement("span");
+  count.className = "pdf-region-count";
+  copy.append(title, detail, count);
+
+  const actions = document.createElement("div");
+  actions.className = "pdf-region-tool-actions";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.dataset.pdfRegionToggle = "true";
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.dataset.pdfRegionClear = "true";
+  clear.textContent = "清空框选";
+  toggle.addEventListener("click", () => {
+    state.pdfManualRegionSelectionEnabled = !state.pdfManualRegionSelectionEnabled;
+    updatePdfRegionSelectionControls();
+  });
+  clear.addEventListener("click", () => {
+    state.pdfManualPreservedRegions = new Map();
+    document.querySelectorAll(".pdf-region-layer").forEach((layer) => renderPdfManualRegionBoxes(layer));
+    updatePdfRegionSelectionControls();
+    scheduleCurrentDraftSave();
+  });
+  actions.append(toggle, clear);
+  panel.append(copy, actions);
+  updatePdfRegionSelectionControls(panel);
+  return panel;
+}
+
+function createPdfRegionSelectionLayer({ pagePath, pageWidth, pageHeight, cssWidth, cssHeight }) {
+  const layer = document.createElement("div");
+  layer.className = "pdf-region-layer";
+  layer.dataset.pagePath = pagePath;
+  layer.dataset.pageWidth = String(pageWidth);
+  layer.dataset.pageHeight = String(pageHeight);
+  layer.dataset.cssWidth = String(cssWidth);
+  layer.dataset.cssHeight = String(cssHeight);
+
+  let drag = null;
+
+  layer.addEventListener("pointerdown", (event) => {
+    if (!state.pdfManualRegionSelectionEnabled) return;
+    if (event.button !== undefined && event.button !== 0) return;
+    event.preventDefault();
+    const start = getPdfRegionLayerPoint(layer, event);
+    const draft = document.createElement("div");
+    draft.className = "pdf-region-draft";
+    layer.append(draft);
+    drag = { start, current: start, draft };
+    layer.setPointerCapture?.(event.pointerId);
+    updatePdfRegionDraftBox(drag);
+  });
+
+  layer.addEventListener("pointermove", (event) => {
+    if (!drag) return;
+    event.preventDefault();
+    drag.current = getPdfRegionLayerPoint(layer, event);
+    updatePdfRegionDraftBox(drag);
+  });
+
+  const finishDrag = (event) => {
+    if (!drag) return;
+    event.preventDefault();
+    const rect = getPdfRegionCssRect(drag.start, drag.current);
+    drag.draft.remove();
+    drag = null;
+    layer.releasePointerCapture?.(event.pointerId);
+    if (rect.width < 8 || rect.height < 8) return;
+    addPdfManualPreservedRegionFromCss(layer, rect);
+    renderPdfManualRegionBoxes(layer);
+    updatePdfRegionSelectionControls();
+    scheduleCurrentDraftSave();
+  };
+
+  layer.addEventListener("pointerup", finishDrag);
+  layer.addEventListener("pointercancel", (event) => {
+    if (!drag) return;
+    event.preventDefault();
+    drag.draft.remove();
+    drag = null;
+  });
+
+  return layer;
+}
+
+function getPdfRegionLayerPoint(layer, event) {
+  const rect = layer.getBoundingClientRect();
+  const x = clampNumber(event.clientX - rect.left, 0, rect.width);
+  const y = clampNumber(event.clientY - rect.top, 0, rect.height);
+  return { x, y };
+}
+
+function getPdfRegionCssRect(a, b) {
+  const left = Math.min(a.x, b.x);
+  const top = Math.min(a.y, b.y);
+  return {
+    left,
+    top,
+    width: Math.abs(a.x - b.x),
+    height: Math.abs(a.y - b.y),
+  };
+}
+
+function updatePdfRegionDraftBox(drag) {
+  const rect = getPdfRegionCssRect(drag.start, drag.current);
+  Object.assign(drag.draft.style, {
+    left: `${rect.left}px`,
+    top: `${rect.top}px`,
+    width: `${rect.width}px`,
+    height: `${rect.height}px`,
+  });
+}
+
+function addPdfManualPreservedRegionFromCss(layer, rect) {
+  const pagePath = layer.dataset.pagePath || "";
+  const pageWidth = Number(layer.dataset.pageWidth || 0);
+  const pageHeight = Number(layer.dataset.pageHeight || 0);
+  const cssWidth = Number(layer.dataset.cssWidth || layer.getBoundingClientRect().width || 1);
+  const cssHeight = Number(layer.dataset.cssHeight || layer.getBoundingClientRect().height || 1);
+  if (!pagePath || !pageWidth || !pageHeight) return;
+
+  const x = clampNumber((rect.left / cssWidth) * pageWidth, 0, pageWidth);
+  const width = clampNumber((rect.width / cssWidth) * pageWidth, 1, pageWidth - x);
+  const topPdf = pageHeight - (rect.top / cssHeight) * pageHeight;
+  const bottomPdf = pageHeight - ((rect.top + rect.height) / cssHeight) * pageHeight;
+  const y = clampNumber(bottomPdf, 0, pageHeight);
+  const height = clampNumber(topPdf - bottomPdf, 1, pageHeight - y);
+  const regions = state.pdfManualPreservedRegions.get(pagePath) || [];
+  regions.push({
+    id: `manual-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    kind: "manual",
+    x,
+    y,
+    width,
+    height,
+  });
+  state.pdfManualPreservedRegions.set(pagePath, regions);
+}
+
+function renderPdfManualRegionBoxes(layer) {
+  layer.querySelectorAll(".pdf-manual-region-box").forEach((box) => box.remove());
+  const pagePath = layer.dataset.pagePath || "";
+  const regions = state.pdfManualPreservedRegions.get(pagePath) || [];
+  const pageWidth = Number(layer.dataset.pageWidth || 1);
+  const pageHeight = Number(layer.dataset.pageHeight || 1);
+  const cssWidth = Number(layer.dataset.cssWidth || layer.getBoundingClientRect().width || 1);
+  const cssHeight = Number(layer.dataset.cssHeight || layer.getBoundingClientRect().height || 1);
+
+  regions.forEach((region, index) => {
+    const box = document.createElement("div");
+    box.className = "pdf-manual-region-box";
+    box.style.left = `${(Number(region.x || 0) / pageWidth) * cssWidth}px`;
+    box.style.top = `${((pageHeight - Number(region.y || 0) - Number(region.height || 0)) / pageHeight) * cssHeight}px`;
+    box.style.width = `${(Number(region.width || 0) / pageWidth) * cssWidth}px`;
+    box.style.height = `${(Number(region.height || 0) / pageHeight) * cssHeight}px`;
+    const label = document.createElement("span");
+    label.textContent = `保留 ${index + 1}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.title = "删除此区域";
+    remove.setAttribute("aria-label", "删除此区域");
+    remove.textContent = "×";
+    remove.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      removePdfManualPreservedRegion(pagePath, region.id);
+      renderPdfManualRegionBoxes(layer);
+      updatePdfRegionSelectionControls();
+      scheduleCurrentDraftSave();
+    });
+    box.append(label, remove);
+    layer.append(box);
+  });
+}
+
+function removePdfManualPreservedRegion(pagePath, regionId) {
+  const regions = state.pdfManualPreservedRegions.get(pagePath) || [];
+  const next = regions.filter((region) => region.id !== regionId);
+  if (next.length) state.pdfManualPreservedRegions.set(pagePath, next);
+  else state.pdfManualPreservedRegions.delete(pagePath);
+}
+
+function updatePdfRegionSelectionControls(root = document) {
+  const count = getPdfManualPreservedRegionCount();
+  const enabled = Boolean(state.pdfManualRegionSelectionEnabled);
+  root.querySelectorAll?.("[data-pdf-region-toggle]").forEach((button) => {
+    button.textContent = enabled ? "结束框选" : "开始框选";
+    button.classList.toggle("active", enabled);
+  });
+  root.querySelectorAll?.("[data-pdf-region-clear]").forEach((button) => {
+    button.disabled = count === 0;
+  });
+  root.querySelectorAll?.(".pdf-region-count").forEach((item) => {
+    item.textContent = count ? `已框选 ${count} 个区域` : "还没有手动框选区域";
+  });
+  els.previewBody?.classList.toggle("pdf-region-selecting", enabled);
+}
+
+function getPdfManualPreservedRegionCount() {
+  return [...state.pdfManualPreservedRegions.values()].reduce((sum, regions) => sum + regions.length, 0);
 }
 
 function renderOriginalOfficePdfPreview(kind) {
@@ -5628,7 +5877,7 @@ function getPdfExportText(segment) {
 
 function isInsidePdfPreservedRegion(segment) {
   if (segment?.type !== "pdf" || !segment.layout?.bounds) return false;
-  const regions = state.pdfPreservedRegions.get(segment.path) || [];
+  const regions = getPdfPreservedRegionsForPage(segment.path);
   if (!regions.length) return false;
   const bounds = segment.layout.bounds;
   const cx = Number(bounds.x || 0) + Number(bounds.width || 0) / 2;
@@ -6356,6 +6605,7 @@ async function saveCurrentDraft() {
       fileBlob: state.file,
       slideSize: state.slideSize,
       mobileView: state.mobileView,
+      pdfManualPreservedRegions: serializePdfManualPreservedRegions(),
       segments: state.segments.map((segment) => ({
         id: segment.id,
         type: segment.type,
@@ -6392,6 +6642,7 @@ async function restoreCurrentDraft() {
       throw new Error("Draft source file could not be restored");
     }
     applyDraftSegments(draft);
+    restorePdfManualPreservedRegions(draft.pdfManualPreservedRegions);
     renderSegments();
     updateStats();
     if (draft.mobileView) setMobileView(draft.mobileView);
@@ -6418,6 +6669,39 @@ function applyDraftSegments(draft) {
       ...createSegmentOverrides(),
       ...sanitizeSegmentOverrides(saved.overrides),
     };
+  });
+}
+
+function serializePdfManualPreservedRegions() {
+  return [...state.pdfManualPreservedRegions.entries()].map(([pagePath, regions]) => ({
+    pagePath,
+    regions: (regions || []).map((region) => ({
+      id: region.id || `manual-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      kind: "manual",
+      x: Number(region.x || 0),
+      y: Number(region.y || 0),
+      width: Number(region.width || 0),
+      height: Number(region.height || 0),
+    })).filter((region) => region.width > 0 && region.height > 0),
+  })).filter((entry) => entry.pagePath && entry.regions.length);
+}
+
+function restorePdfManualPreservedRegions(entries) {
+  state.pdfManualPreservedRegions = new Map();
+  (entries || []).forEach((entry) => {
+    const pagePath = String(entry?.pagePath || "");
+    if (!pagePath) return;
+    const regions = (entry.regions || [])
+      .map((region) => ({
+        id: region.id || `manual-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        kind: "manual",
+        x: Number(region.x || 0),
+        y: Number(region.y || 0),
+        width: Number(region.width || 0),
+        height: Number(region.height || 0),
+      }))
+      .filter((region) => Number.isFinite(region.x) && Number.isFinite(region.y) && region.width > 0 && region.height > 0);
+    if (regions.length) state.pdfManualPreservedRegions.set(pagePath, regions);
   });
 }
 
@@ -6496,6 +6780,8 @@ async function resetApp(clearInput = true, options = {}) {
   state.pdfTableCells = new Map();
   state.pdfEraseFragments = new Map();
   state.pdfPreservedRegions = new Map();
+  state.pdfManualPreservedRegions = new Map();
+  state.pdfManualRegionSelectionEnabled = false;
   state.pdfBytes = null;
   state.pdfParseSource = "";
   state.pdfParsedMarkdown = "";
