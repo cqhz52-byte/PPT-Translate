@@ -36,6 +36,7 @@ const state = {
   originalPreviewUrl: "",
   loadToken: 0,
   importRunning: false,
+  jsZipLoadPromise: null,
 };
 
 const els = {
@@ -110,8 +111,9 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v110";
+const APP_VERSION = "v111";
 const VERSION_URL = "./version.json";
+const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
 const DEEPSEEK_API_BASE = "https://api.deepseek.com";
@@ -486,12 +488,56 @@ els.helpDialog?.addEventListener("click", (event) => {
 });
 
 updateFontScaleLabel();
-loadSavedFiles().catch((error) => {
-  console.warn("Saved file list unavailable", error);
-});
-restoreCurrentDraft().catch((error) => {
-  console.warn("Draft restore unavailable", error);
-});
+initializeAppStartup();
+
+async function initializeAppStartup() {
+  updateStartupStatus("正在加载应用界面...", "正在准备按钮、文件库和离线能力。", 28);
+
+  try {
+    updateStartupStatus("正在读取文件库...", "读取本机已保存的翻译文件。", 46);
+    await loadSavedFiles();
+  } catch (error) {
+    console.warn("Saved file list unavailable", error);
+  }
+
+  try {
+    updateStartupStatus("正在检查上次编辑内容...", "如果上次有未导出的文件，会自动恢复。", 64);
+    await restoreCurrentDraft();
+  } catch (error) {
+    console.warn("Draft restore unavailable", error);
+  }
+
+  updateStartupStatus("准备完成", "可以选择文档开始翻译。", 100);
+  window.setTimeout(hideStartupOverlay, 260);
+  warmOptionalAppCache();
+}
+
+function updateStartupStatus(message, detail = "", progress = 0) {
+  const overlay = document.querySelector("#startupOverlay");
+  if (!overlay) return;
+  const messageEl = overlay.querySelector("#startupMessage");
+  const detailEl = overlay.querySelector("#startupDetail");
+  const progressEl = overlay.querySelector("#startupProgress");
+  if (messageEl) messageEl.textContent = message;
+  if (detailEl) detailEl.textContent = detail;
+  if (progressEl) progressEl.style.setProperty("--startup-progress", `${Math.max(8, Math.min(100, progress))}%`);
+}
+
+function hideStartupOverlay() {
+  const overlay = document.querySelector("#startupOverlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+  window.setTimeout(() => overlay.remove(), 320);
+}
+
+function warmOptionalAppCache() {
+  if (!navigator.serviceWorker?.controller) return;
+  try {
+    navigator.serviceWorker.controller.postMessage({ type: "WARM_OPTIONAL_CACHE" });
+  } catch (error) {
+    console.warn("Optional cache warmup failed", error);
+  }
+}
 
 async function loadOfficeFile(file, options = {}) {
   const silent = Boolean(options.silent);
@@ -537,7 +583,8 @@ async function loadOfficeFile(file, options = {}) {
       setProgress(0.08);
       setStatus(`正在展开 ${getFileTypeName()} 文件结构，请稍候...`);
       await waitForUiFrame();
-      state.zip = await JSZip.loadAsync(file);
+      const JSZipLib = await loadJsZip();
+      state.zip = await JSZipLib.loadAsync(file);
     }
 
     if (state.loadToken !== loadToken) return;
@@ -918,6 +965,48 @@ async function loadPdfJs() {
 
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
   return window.pdfjsLib;
+}
+
+async function loadJsZip() {
+  if (window.JSZip) return window.JSZip;
+  if (!state.jsZipLoadPromise) {
+    setStatus("正在加载 Office 文档解析组件...");
+    state.jsZipLoadPromise = loadScriptOnce(JSZIP_URL, "JSZip 文档解析组件")
+      .then(() => {
+        if (!window.JSZip) throw new Error("JSZip 文档解析组件加载失败。");
+        return window.JSZip;
+      })
+      .finally(() => {
+        state.jsZipLoadPromise = null;
+      });
+  }
+  return state.jsZipLoadPromise;
+}
+
+function loadScriptOnce(src, label = "组件") {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[data-dynamic-src="${src}"]`);
+    if (existing?.dataset.loaded === "true") {
+      resolve();
+      return;
+    }
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", () => reject(new Error(`${label}加载失败。`)), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.dataset.dynamicSrc = src;
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "true";
+      resolve();
+    }, { once: true });
+    script.addEventListener("error", () => reject(new Error(`${label}加载失败。`)), { once: true });
+    document.head.append(script);
+  });
 }
 
 async function renderPdfPageSample(page) {
@@ -3191,7 +3280,8 @@ async function createSavedOfficePdfShareFile(record) {
   const kind = getSavedFileKind(record);
   if (!["docx", "pptx"].includes(kind)) throw new Error("这个文件暂不支持生成 PDF 分享版。");
 
-  const zip = await JSZip.loadAsync(record.blob);
+  const JSZipLib = await loadJsZip();
+  const zip = await JSZipLib.loadAsync(record.blob);
   const sections = kind === "docx"
     ? await extractSavedDocxTextSections(zip)
     : await extractSavedPptxTextSections(zip);
@@ -5634,6 +5724,7 @@ async function restoreCurrentDraft() {
 
   isRestoringDraft = true;
   try {
+    updateStartupStatus("正在恢复上次文件...", "正在重新解析上次未导出的文档，请稍候。", 72);
     setBusy(true, "正在恢复上次编辑内容...");
     const file = new File([draft.fileBlob], draft.fileName, {
       type: draft.fileBlob.type || getMimeTypeForFileType(draft.fileType),
