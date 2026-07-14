@@ -9,6 +9,7 @@ const state = {
   pdfPageSizes: new Map(),
   pdfTableCells: new Map(),
   pdfEraseFragments: new Map(),
+  pdfPreservedRegions: new Map(),
   pdfBytes: null,
   pdfParseSource: "",
   pdfParsedMarkdown: "",
@@ -111,7 +112,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v117";
+const APP_VERSION = "v118";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -589,6 +590,7 @@ async function loadOfficeFile(file, options = {}) {
     state.pdfPageSizes = new Map();
     state.pdfTableCells = new Map();
     state.pdfEraseFragments = new Map();
+    state.pdfPreservedRegions = new Map();
     state.pdfBytes = null;
     state.pdfParseSource = "";
     state.pdfParsedMarkdown = "";
@@ -732,6 +734,8 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
     state.pdfEraseFragments.set(`pdf/page-${pageNumber}`, extractPdfTextEraseFragments(content.items));
     const lines = extractPdfLineSegments(content.items, pageWidth);
     const blocks = groupPdfLineSegmentsIntoBlocks(lines, pageWidth, pageHeight);
+    const preservedRegions = detectPdfPreservedFigureRegions(page, blocks, pageWidth, pageHeight);
+    state.pdfPreservedRegions.set(`pdf/page-${pageNumber}`, preservedRegions);
     const referenceContext = getPdfReferenceContext(lines, pageHeight, pdfReferenceSectionStarted);
     pdfReferenceSectionStarted = pdfReferenceSectionStarted || referenceContext.startedOnPage;
     blocks.forEach((block, index) => {
@@ -1542,6 +1546,24 @@ async function drawPdfPreservedPageFurniture(sourcePage, targetPage, pdfDoc, pag
     { x: 0, y: 0, width: pageWidth, height: bottomHeight },
   ];
 
+  for (const region of regions) {
+    const pngBytes = await renderPdfPageCropToPng(sourcePage, region, pageWidth, pageHeight, options);
+    if (!pngBytes) continue;
+    const image = await pdfDoc.embedPng(pngBytes);
+    targetPage.drawImage(image, {
+      x: region.x,
+      y: region.y,
+      width: region.width,
+      height: region.height,
+    });
+  }
+}
+
+async function drawPdfPreservedRegions(sourcePage, targetPage, pdfDoc, pagePath, pageSize, options = {}) {
+  const regions = state.pdfPreservedRegions.get(pagePath) || [];
+  if (!regions.length) return;
+  const pageWidth = Number(pageSize.width || 595.28);
+  const pageHeight = Number(pageSize.height || 841.89);
   for (const region of regions) {
     const pngBytes = await renderPdfPageCropToPng(sourcePage, region, pageWidth, pageHeight, options);
     if (!pngBytes) continue;
@@ -2377,6 +2399,66 @@ function finalizePdfTextBlock(block, pageWidth) {
       width: Math.max(block.bounds.width, Math.min(Math.max(8, boundedWidth), pageWidth - block.bounds.x - 18)),
     },
   };
+}
+
+function detectPdfPreservedFigureRegions(page, blocks, pageWidth, pageHeight) {
+  const captions = (blocks || []).filter((block) => isPdfFigureCaptionText(block.text));
+  if (!captions.length) return [];
+
+  return captions.map((caption) => {
+    const captionBounds = caption.bounds || {};
+    const captionY = Number(captionBounds.y || 0);
+    const captionX = Number(captionBounds.x || 0);
+    const captionWidth = Number(captionBounds.width || 0);
+    const nearbyTextBounds = (blocks || [])
+      .filter((block) => block !== caption && isLikelyPdfFigureInnerLabel(block.text, block.bounds, caption.bounds, pageWidth, pageHeight))
+      .map((block) => block.bounds);
+    const nearbyRegions = nearbyTextBounds.filter((bounds) => {
+      const verticallyAboveCaption = Number(bounds.y || 0) >= captionY + Number(captionBounds.height || 0) * 0.25;
+      const closeEnough = Number(bounds.y || 0) <= captionY + Math.max(260, pageHeight * 0.38);
+      const horizontalOverlap = rectHorizontalOverlap(bounds, {
+        x: Math.max(0, captionX - pageWidth * 0.12),
+        width: Math.min(pageWidth, captionWidth + pageWidth * 0.24),
+      }) > Math.min(Number(bounds.width || 0), Math.max(1, captionWidth)) * 0.16;
+      return verticallyAboveCaption && closeEnough && horizontalOverlap;
+    });
+
+    const union = nearbyRegions.reduce((area, bounds) => area ? unionPdfBounds(area, bounds) : { ...bounds }, null);
+    if (!union) return null;
+    const region = unionPdfBounds(union, captionBounds);
+    const padX = Math.max(10, pageWidth * 0.025);
+    const padY = Math.max(8, pageHeight * 0.014);
+    return {
+      x: Math.max(0, region.x - padX),
+      y: Math.max(0, region.y - padY),
+      width: Math.min(pageWidth, region.x + region.width + padX) - Math.max(0, region.x - padX),
+      height: Math.min(pageHeight, region.y + region.height + padY) - Math.max(0, region.y - padY),
+      kind: "figure",
+    };
+  }).filter((region) => region && region.width > 24 && region.height > 24);
+}
+
+function isLikelyPdfFigureInnerLabel(text, bounds, captionBounds, pageWidth, pageHeight) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized || !bounds || !captionBounds) return false;
+  if (isPdfFigureCaptionText(normalized)) return false;
+  const y = Number(bounds.y || 0);
+  const captionY = Number(captionBounds.y || 0);
+  if (y <= captionY) return false;
+  if (Number(bounds.height || 0) > pageHeight * 0.14) return false;
+  if (Number(bounds.width || 0) > pageWidth * 0.34) return false;
+  return /^[\d(). -]+$/.test(normalized) ||
+    /(?:ultrasound|generator|meter|thermometer|electrode|muscle|transducer|spacer|probe|distance|surface|center|NO[- ]?\d+|DT[- ]?\d+)/i.test(normalized);
+}
+
+function rectHorizontalOverlap(a, b) {
+  const left = Math.max(Number(a.x || 0), Number(b.x || 0));
+  const right = Math.min(Number(a.x || 0) + Number(a.width || 0), Number(b.x || 0) + Number(b.width || 0));
+  return Math.max(0, right - left);
+}
+
+function isPdfFigureCaptionText(text) {
+  return /^\s*(?:fig\.?|figure)\s*\d+[.:]/i.test(String(text || "").trim());
 }
 
 function estimatePdfColumnWidth(lines, pageWidth) {
@@ -4599,6 +4681,7 @@ async function downloadPdfOverlayTranslation() {
         ...pageRenderOptions,
         deadline: Date.now() + pageBudgetMs,
       });
+      await drawPdfPreservedRegions(sourcePage, page, pdfDoc, `pdf/page-${pageNumber}`, pageSize, pageRenderOptions);
       await drawPdfPreservedPageFurniture(sourcePage, page, pdfDoc, pageSize, pageRenderOptions);
     } catch (error) {
       console.warn(`PDF page ${pageNumber} non-text rebuild failed`, error);
@@ -5351,6 +5434,8 @@ function drawPdfOverlayText(page, plan, font, rgb) {
 }
 
 function getPdfExportText(segment) {
+  if (isInsidePdfPreservedRegion(segment)) return "";
+
   if (shouldKeepPdfSourceText(segment)) {
     return shouldRedrawKeptPdfSourceText(segment) ? sanitizePdfExportText(segment.original) : "";
   }
@@ -5369,6 +5454,16 @@ function getPdfExportText(segment) {
   }
 
   return text;
+}
+
+function isInsidePdfPreservedRegion(segment) {
+  if (segment?.type !== "pdf" || !segment.layout?.bounds) return false;
+  const regions = state.pdfPreservedRegions.get(segment.path) || [];
+  if (!regions.length) return false;
+  const bounds = segment.layout.bounds;
+  const cx = Number(bounds.x || 0) + Number(bounds.width || 0) / 2;
+  const cy = Number(bounds.y || 0) + Number(bounds.height || 0) / 2;
+  return regions.some((region) => pointInRect(cx, cy, region) || rectsIntersect(bounds, region));
 }
 
 function shouldRedrawKeptPdfSourceText(segment) {
@@ -6230,6 +6325,7 @@ async function resetApp(clearInput = true, options = {}) {
   state.pdfPageSizes = new Map();
   state.pdfTableCells = new Map();
   state.pdfEraseFragments = new Map();
+  state.pdfPreservedRegions = new Map();
   state.pdfBytes = null;
   state.pdfParseSource = "";
   state.pdfParsedMarkdown = "";
