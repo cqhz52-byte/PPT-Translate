@@ -111,7 +111,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v113";
+const APP_VERSION = "v114";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -374,15 +374,21 @@ async function applyAppUpdate() {
 
 els.libraryButton?.addEventListener("click", openFileLibrary);
 
+els.uploadZone?.addEventListener("click", (event) => {
+  if (event.target === els.fileInput) return;
+  event.preventDefault();
+  openFilePicker();
+});
+
+els.fileInput.addEventListener("click", (event) => {
+  event.stopPropagation();
+  els.fileInput.value = "";
+});
+
 els.fileInput.addEventListener("change", async (event) => {
   const files = [...(event.target.files || [])];
   event.target.value = "";
-  if (!files.length) return;
-  if (files.length > 1) {
-    queueBatchFiles(files);
-    return;
-  }
-  await loadOfficeFile(files[0]);
+  await handleSelectedFiles(files);
 });
 
 els.mobileViewButton?.addEventListener("click", () => {
@@ -432,16 +438,11 @@ setMobileView(state.mobileView);
 });
 
 ["dragleave", "drop"].forEach((eventName) => {
-  els.uploadZone.addEventListener(eventName, (event) => {
+  els.uploadZone.addEventListener(eventName, async (event) => {
     event.preventDefault();
     if (eventName === "drop") {
       const files = [...(event.dataTransfer?.files || [])];
-      if (files.length > 1) {
-        queueBatchFiles(files);
-      } else if (files[0]) {
-        els.fileInput.value = "";
-        loadOfficeFile(files[0]);
-      }
+      await handleSelectedFiles(files);
     }
     els.uploadZone.classList.remove("drag-over");
   });
@@ -488,6 +489,31 @@ els.helpDialog?.addEventListener("click", (event) => {
   element?.addEventListener("change", handleSettingsChange);
   element?.addEventListener("input", handleSettingsChange);
 });
+
+function openFilePicker() {
+  if (document.body.classList.contains("is-busy") || state.importRunning) {
+    showToast("正在处理当前文档，请稍候再选择新文件。", true);
+    return;
+  }
+  els.fileInput.disabled = false;
+  els.fileInput.value = "";
+  els.fileInput.click();
+}
+
+async function handleSelectedFiles(files) {
+  const selectedFiles = [...(files || [])].filter(Boolean);
+  els.fileInput.value = "";
+  if (!selectedFiles.length) return;
+  if (document.body.classList.contains("is-busy") || state.importRunning) {
+    showToast("当前任务还没有完成，请稍候再选择新文件。", true);
+    return;
+  }
+  if (selectedFiles.length > 1) {
+    queueBatchFiles(selectedFiles);
+    return;
+  }
+  await loadOfficeFile(selectedFiles[0]);
+}
 
 updateFontScaleLabel();
 initializeAppStartup();
@@ -3902,7 +3928,7 @@ function setBusy(isBusy, message = "") {
   if (els.previewShareButton) {
     els.previewShareButton.disabled = effectiveBusy || !state.segments.length || !hasTranslations;
   }
-  els.fileInput.disabled = effectiveBusy && !state.importRunning;
+  els.fileInput.disabled = effectiveBusy;
   document.body.classList.toggle("is-busy", effectiveBusy);
   if (els.statusVisual) {
     els.statusVisual.classList.toggle("active", effectiveBusy);
