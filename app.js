@@ -114,7 +114,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v119";
+const APP_VERSION = "v120";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -767,9 +767,12 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
     state.pdfEraseFragments.set(`pdf/page-${pageNumber}`, extractPdfTextEraseFragments(content.items));
     const lines = extractPdfLineSegments(content.items, pageWidth);
     const blocks = groupPdfLineSegmentsIntoBlocks(lines, pageWidth, pageHeight);
-    const preservedRegions = detectPdfPreservedFigureRegions(page, blocks, pageWidth, pageHeight);
-    state.pdfPreservedRegions.set(`pdf/page-${pageNumber}`, preservedRegions);
     const referenceContext = getPdfReferenceContext(lines, pageHeight, pdfReferenceSectionStarted);
+    const preservedRegions = [
+      ...detectPdfPreservedFigureRegions(page, blocks, pageWidth, pageHeight),
+      ...detectPdfPreservedReferenceRegions(blocks, referenceContext, pageWidth, pageHeight),
+    ];
+    state.pdfPreservedRegions.set(`pdf/page-${pageNumber}`, preservedRegions);
     pdfReferenceSectionStarted = pdfReferenceSectionStarted || referenceContext.startedOnPage;
     blocks.forEach((block, index) => {
       const tableCell = findPdfTableCell(block.bounds, tableCells);
@@ -796,6 +799,7 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
           backgroundColor,
           textColor: getReadablePdfTextColor(backgroundColor),
           isReferenceText: isPdfReferenceLine(block, referenceContext, pageWidth, pageHeight),
+          isFigureCaption: isPdfFigureCaptionText(block.text),
         },
         overrides: createSegmentOverrides(),
         original: block.text,
@@ -2469,6 +2473,57 @@ function detectPdfPreservedFigureRegions(page, blocks, pageWidth, pageHeight) {
       kind: "figure",
     };
   }).filter((region) => region && region.width > 24 && region.height > 24);
+}
+
+function detectPdfPreservedReferenceRegions(blocks, referenceContext, pageWidth, pageHeight) {
+  if (!referenceContext?.active) return [];
+
+  const referenceBlocks = (blocks || []).filter((block) =>
+    isPdfReferencesHeading(block.text) ||
+    isPdfReferenceLine(block, referenceContext, pageWidth, pageHeight)
+  );
+  if (!referenceBlocks.length) return [];
+
+  const groups = new Map();
+  referenceBlocks.forEach((block) => {
+    const bounds = block.bounds || {};
+    const cx = Number(bounds.x || 0) + Number(bounds.width || 0) / 2;
+    const key = cx < pageWidth * 0.44 ? "left" : (cx > pageWidth * 0.56 ? "right" : "full");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(block);
+  });
+
+  return [...groups.entries()].map(([key, group]) => {
+    const union = group.reduce((area, block) => area ? unionPdfBounds(area, block.bounds) : { ...block.bounds }, null);
+    if (!union) return null;
+    const column = getPdfReferenceColumnBounds(key, union, pageWidth);
+    const padX = Math.max(5, pageWidth * 0.008);
+    const padTop = Math.max(10, pageHeight * 0.014);
+    const padBottom = Math.max(10, pageHeight * 0.014);
+    const y = Math.max(0, union.y - padBottom);
+    const top = Math.min(pageHeight, union.y + union.height + padTop);
+    return {
+      x: Math.max(0, column.x - padX),
+      y,
+      width: Math.min(pageWidth, column.x + column.width + padX) - Math.max(0, column.x - padX),
+      height: Math.max(1, top - y),
+      kind: "reference",
+    };
+  }).filter((region) => region && region.width > 24 && region.height > 24);
+}
+
+function getPdfReferenceColumnBounds(key, union, pageWidth) {
+  if (key === "left") {
+    return { x: Math.max(0, pageWidth * 0.055), width: Math.max(1, pageWidth * 0.44) };
+  }
+  if (key === "right") {
+    const x = Math.max(0, pageWidth * 0.505);
+    return { x, width: Math.max(1, pageWidth * 0.45) };
+  }
+  return {
+    x: Math.max(0, Number(union.x || 0) - pageWidth * 0.015),
+    width: Math.min(pageWidth, Number(union.width || 0) + pageWidth * 0.03),
+  };
 }
 
 function isLikelyPdfFigureInnerLabel(text, bounds, captionBounds, pageWidth, pageHeight) {
@@ -4766,6 +4821,7 @@ async function downloadPdfOverlayTranslation() {
     }
   }
 
+  resolvePdfOverlayPlanCollisions(overlayPlans);
   overlayPlans.forEach(({ page, plan }) => drawPdfOverlayText(page, plan, font, rgb));
 
   setProgress(0.9);
@@ -4836,6 +4892,8 @@ function createPdfOverlayPlan(segment, font) {
     : fitY + Math.max(0, (fitBounds.height - textHeight) / 2) + baselineOffset + (lines.length - 1) * lineHeight;
 
   return {
+    segmentId: segment.id,
+    path: segment.path,
     erase: {
       x: eraseX,
       y: eraseY,
@@ -4849,6 +4907,8 @@ function createPdfOverlayPlan(segment, font) {
     lineHeight,
     textColor,
     cellAlign: segment.layout.cellAlign,
+    columnKey: segment.layout.columnKey || "",
+    isFigureCaption: Boolean(segment.layout.isFigureCaption),
     isTitleLike,
     isTableLike,
     y,
@@ -5038,6 +5098,16 @@ function getPdfOverlayFitBounds(segment, font, text, sourceBounds) {
   const columnKey = layout.columnKey || "";
   const columnLeft = columnKey === "right" ? pageWidth * 0.505 : (columnKey === "left" ? pageWidth * 0.055 : 0);
   const columnRight = columnKey === "left" ? pageWidth * 0.49 : (columnKey === "right" ? pageWidth * 0.955 : pageWidth - 8);
+  if (layout.isFigureCaption) {
+    const captionX = Math.max(36, Math.min(Number(sourceBounds.x || 0), pageWidth * 0.08));
+    const captionRight = Math.min(pageWidth - 32, Math.max(Number(sourceBounds.x || 0) + sourceWidth, pageWidth * 0.92));
+    return {
+      ...sourceBounds,
+      x: captionX,
+      width: Math.max(sourceWidth, captionRight - captionX),
+      height: Math.max(sourceHeight, Math.min(54, sourceHeight * 2.2)),
+    };
+  }
   const boundedX = columnKey === "left" || columnKey === "right"
     ? clampNumber(Number(sourceBounds.x || 0), columnLeft, Math.max(columnLeft, columnRight - sourceWidth))
     : Number(sourceBounds.x || 0);
@@ -5457,6 +5527,64 @@ function drawPdfOverlayErase(page, plan, rgb) {
   });
 }
 
+function resolvePdfOverlayPlanCollisions(overlayPlans) {
+  const pageGroups = new Map();
+  overlayPlans.forEach((entry) => {
+    if (!entry?.page || !entry.plan) return;
+    if (!pageGroups.has(entry.page)) pageGroups.set(entry.page, []);
+    pageGroups.get(entry.page).push(entry.plan);
+  });
+
+  pageGroups.forEach((plans) => {
+    const blockers = plans
+      .filter((plan) => plan.isFigureCaption)
+      .map((plan) => ({ plan, bounds: getPdfPlanTextBounds(plan, 3) }))
+      .filter((item) => item.bounds);
+    if (!blockers.length) return;
+
+    const sorted = plans
+      .filter((plan) => !plan.isFigureCaption)
+      .sort((a, b) => Number(b.fitBounds?.y || 0) - Number(a.fitBounds?.y || 0));
+
+    sorted.forEach((plan) => {
+      let bounds = getPdfPlanTextBounds(plan, 2);
+      if (!bounds) return;
+      blockers.forEach((blocker) => {
+        if (!bounds || !blocker.bounds) return;
+        if (!rectHorizontalOverlap(bounds, blocker.bounds)) return;
+        if (!rectsIntersect(bounds, blocker.bounds)) return;
+        const targetTop = Number(blocker.bounds.y || 0) - 4;
+        const currentTop = Number(bounds.y || 0) + Number(bounds.height || 0);
+        const shiftDown = Math.max(0, currentTop - targetTop);
+        if (shiftDown <= 0) return;
+        shiftPdfOverlayPlanDown(plan, Math.min(shiftDown, 42));
+        bounds = getPdfPlanTextBounds(plan, 2);
+      });
+    });
+  });
+}
+
+function shiftPdfOverlayPlanDown(plan, amount) {
+  const delta = Number(amount || 0);
+  if (!Number.isFinite(delta) || delta <= 0) return;
+  plan.y -= delta;
+  if (plan.fitBounds) plan.fitBounds.y = Math.max(0, Number(plan.fitBounds.y || 0) - delta);
+  if (plan.erase) plan.erase.y = Math.max(0, Number(plan.erase.y || 0) - delta);
+}
+
+function getPdfPlanTextBounds(plan, padding = 0) {
+  if (!plan?.fitBounds || !Array.isArray(plan.lines) || !plan.lines.length) return null;
+  const baseline = getPdfBaselineOffset(plan.fontSize);
+  const top = Number(plan.y || 0) + Math.max(1, Number(plan.fontSize || 0) * 0.28) + padding;
+  const bottom = Number(plan.y || 0) - (plan.lines.length - 1) * Number(plan.lineHeight || 0) - baseline - padding;
+  return {
+    x: Math.max(0, Number(plan.fitBounds.x || 0) - padding),
+    y: Math.max(0, bottom),
+    width: Math.max(1, Number(plan.fitBounds.width || 0) + padding * 2),
+    height: Math.max(1, top - Math.max(0, bottom)),
+  };
+}
+
 function drawPdfOverlayText(page, plan, font, rgb) {
   let y = plan.y;
 
@@ -5512,8 +5640,8 @@ function shouldRedrawKeptPdfSourceText(segment) {
   if (!segment || isLikelyPdfHeaderFooterText(segment) || isLikelyPdfPublicationFurniture(segment) || isLikelyPdfArtifactText(segment)) {
     return false;
   }
-  return Boolean(segment?.layout?.isReferenceText) ||
-    isLikelyPdfSidebarMetadata(segment) ||
+  if (segment?.layout?.isReferenceText) return false;
+  return isLikelyPdfSidebarMetadata(segment) ||
     isLikelyPdfAuthorByline(segment);
 }
 
