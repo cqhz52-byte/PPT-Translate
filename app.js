@@ -110,7 +110,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v107";
+const APP_VERSION = "v108";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -643,7 +643,7 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     if (state.loadToken !== loadToken) return;
     setProgress(0.08 + (pdf.numPages ? pageNumber / pdf.numPages : 0) * 0.7);
-    setStatus(`正在解析 PDF 第 ${pageNumber}/${pdf.numPages} 页，提取文字和页面背景...`);
+    setStatus(`正在解析 PDF 第 ${pageNumber}/${pdf.numPages} 页，提取文字和页面结构...`);
     await waitForUiFrame();
     if (state.loadToken !== loadToken) return;
     const page = await pdf.getPage(pageNumber);
@@ -932,25 +932,415 @@ async function renderPdfPageSample(page) {
   return { canvas, context, scale };
 }
 
-async function renderPdfPageBackgroundForExport(page, pdfDoc, pageSize) {
-  const width = pageSize.width || 595.28;
-  const height = pageSize.height || 841.89;
-  const maxPixels = isLikelyMobileDevice() ? 2600000 : 4200000;
-  const scale = Math.max(1.35, Math.min(2.2, Math.sqrt(maxPixels / Math.max(1, width * height))));
-  const viewport = page.getViewport({ scale });
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.ceil(viewport.width));
-  canvas.height = Math.max(1, Math.ceil(viewport.height));
-  const context = canvas.getContext("2d", { alpha: false });
-  if (!context) throw new Error("Canvas unavailable for PDF export.");
+async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdfjs, pageSize, rgb) {
+  const operatorList = await sourcePage.getOperatorList();
+  const OPS = pdfjs.OPS || {};
+  const fnArray = operatorList.fnArray || [];
+  const argsArray = operatorList.argsArray || [];
+  const pageWidth = Number(pageSize.width || 595.28);
+  const pageHeight = Number(pageSize.height || 841.89);
+  const stateStack = [createPdfGraphicsState()];
+  let currentPath = null;
 
-  context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  await page.render({ canvasContext: context, viewport }).promise;
-  const bytes = await canvasToArrayBuffer(canvas, "image/jpeg", 0.94);
-  canvas.width = 1;
-  canvas.height = 1;
-  return { image: await pdfDoc.embedJpg(bytes), width, height };
+  const op = {
+    save: OPS.save ?? 10,
+    restore: OPS.restore ?? 11,
+    transform: OPS.transform ?? 12,
+    setLineWidth: OPS.setLineWidth ?? 2,
+    setStrokeRGBColor: OPS.setStrokeRGBColor ?? 59,
+    setFillRGBColor: OPS.setFillRGBColor ?? 58,
+    setStrokeGray: OPS.setStrokeGray ?? 54,
+    setFillGray: OPS.setFillGray ?? 53,
+    constructPath: OPS.constructPath ?? 91,
+    stroke: OPS.stroke ?? 20,
+    closeStroke: OPS.closeStroke ?? 22,
+    fill: OPS.fill ?? 21,
+    eoFill: OPS.eoFill ?? 24,
+    fillStroke: OPS.fillStroke ?? 25,
+    eoFillStroke: OPS.eoFillStroke ?? 26,
+    closeFillStroke: OPS.closeFillStroke ?? 27,
+    endPath: OPS.endPath ?? 23,
+    moveTo: OPS.moveTo ?? 13,
+    lineTo: OPS.lineTo ?? 14,
+    curveTo: OPS.curveTo ?? 15,
+    curveTo2: OPS.curveTo2 ?? 16,
+    curveTo3: OPS.curveTo3 ?? 17,
+    closePath: OPS.closePath ?? 18,
+    rectangle: OPS.rectangle ?? 19,
+    paintImageXObject: OPS.paintImageXObject ?? 85,
+    paintImageXObjectRepeat: OPS.paintImageXObjectRepeat ?? 88,
+    paintJpegXObject: OPS.paintJpegXObject ?? 82,
+    paintInlineImageXObject: OPS.paintInlineImageXObject ?? 86,
+    paintInlineImageXObjectGroup: OPS.paintInlineImageXObjectGroup ?? 87,
+  };
+
+  for (let index = 0; index < fnArray.length; index += 1) {
+    const fn = fnArray[index];
+    const args = argsArray[index] || [];
+    const graphics = stateStack[stateStack.length - 1];
+
+    if (fn === op.save) {
+      stateStack.push(clonePdfGraphicsState(graphics));
+      continue;
+    }
+    if (fn === op.restore) {
+      if (stateStack.length > 1) stateStack.pop();
+      continue;
+    }
+    if (fn === op.transform && args.length >= 6) {
+      graphics.matrix = multiplyPdfMatrix(graphics.matrix, args);
+      continue;
+    }
+    if (fn === op.setLineWidth) {
+      graphics.lineWidth = Math.max(0.2, Math.min(8, Number(args[0] || 1)));
+      continue;
+    }
+    if (fn === op.setStrokeRGBColor) {
+      graphics.strokeColor = normalizePdfOperatorColor(args, graphics.strokeColor);
+      continue;
+    }
+    if (fn === op.setFillRGBColor) {
+      graphics.fillColor = normalizePdfOperatorColor(args, graphics.fillColor);
+      continue;
+    }
+    if (fn === op.setStrokeGray) {
+      graphics.strokeColor = normalizePdfOperatorGray(args, graphics.strokeColor);
+      continue;
+    }
+    if (fn === op.setFillGray) {
+      graphics.fillColor = normalizePdfOperatorGray(args, graphics.fillColor);
+      continue;
+    }
+    if (fn === op.constructPath) {
+      currentPath = extractPdfDrawablePath(args, graphics.matrix, op, pageWidth, pageHeight);
+      continue;
+    }
+    if (fn === op.stroke || fn === op.closeStroke || fn === op.fillStroke || fn === op.eoFillStroke || fn === op.closeFillStroke) {
+      if (fn === op.fillStroke || fn === op.eoFillStroke || fn === op.closeFillStroke) {
+        drawPdfRebuiltPathFills(targetPage, currentPath, graphics, rgb);
+      }
+      drawPdfRebuiltPathStrokes(targetPage, currentPath, graphics, rgb);
+      currentPath = null;
+      continue;
+    }
+    if (fn === op.fill || fn === op.eoFill) {
+      drawPdfRebuiltPathFills(targetPage, currentPath, graphics, rgb);
+      currentPath = null;
+      continue;
+    }
+    if (fn === op.endPath) {
+      currentPath = null;
+      continue;
+    }
+    if (fn === op.paintImageXObject || fn === op.paintJpegXObject) {
+      await drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, args[0], graphics.matrix, pageWidth, pageHeight);
+      continue;
+    }
+    if (fn === op.paintInlineImageXObject) {
+      await drawPdfRebuiltInlineImage(targetPage, pdfDoc, args[0], graphics.matrix, pageWidth, pageHeight);
+      continue;
+    }
+    if (fn === op.paintImageXObjectRepeat || fn === op.paintInlineImageXObjectGroup) {
+      await drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, graphics.matrix, pageWidth, pageHeight);
+    }
+  }
+}
+
+function createPdfGraphicsState() {
+  return {
+    matrix: [1, 0, 0, 1, 0, 0],
+    lineWidth: 1,
+    strokeColor: { r: 0, g: 0, b: 0 },
+    fillColor: { r: 1, g: 1, b: 1 },
+  };
+}
+
+function clonePdfGraphicsState(state) {
+  return {
+    matrix: [...state.matrix],
+    lineWidth: state.lineWidth,
+    strokeColor: { ...state.strokeColor },
+    fillColor: { ...state.fillColor },
+  };
+}
+
+function normalizePdfOperatorColor(args, fallback) {
+  const values = Array.isArray(args) ? args : [];
+  if (values.length < 3) return fallback || { r: 0, g: 0, b: 0 };
+  const max = Math.max(Number(values[0] || 0), Number(values[1] || 0), Number(values[2] || 0));
+  const divisor = max > 1 ? 255 : 1;
+  return {
+    r: clampNumber(Number(values[0] || 0) / divisor, 0, 1),
+    g: clampNumber(Number(values[1] || 0) / divisor, 0, 1),
+    b: clampNumber(Number(values[2] || 0) / divisor, 0, 1),
+  };
+}
+
+function normalizePdfOperatorGray(args, fallback) {
+  if (!Array.isArray(args) || !args.length) return fallback || { r: 0, g: 0, b: 0 };
+  const value = clampNumber(Number(args[0] || 0), 0, 1);
+  return { r: value, g: value, b: value };
+}
+
+function extractPdfDrawablePath(args, matrix, op, pageWidth, pageHeight) {
+  const pathOps = args?.[0] || [];
+  const pathArgs = args?.[1] || [];
+  const lines = [];
+  const rectangles = [];
+  let cursor = 0;
+  let current = null;
+  let firstPoint = null;
+
+  pathOps.forEach((pathOp) => {
+    if (pathOp === op.moveTo) {
+      current = transformPdfPoint(pathArgs[cursor], pathArgs[cursor + 1], matrix);
+      firstPoint = current;
+      cursor += 2;
+      return;
+    }
+    if (pathOp === op.lineTo) {
+      const next = transformPdfPoint(pathArgs[cursor], pathArgs[cursor + 1], matrix);
+      cursor += 2;
+      if (current) lines.push(normalizePdfLineSegment(current, next));
+      current = next;
+      return;
+    }
+    if (pathOp === op.rectangle) {
+      const x = Number(pathArgs[cursor] || 0);
+      const y = Number(pathArgs[cursor + 1] || 0);
+      const w = Number(pathArgs[cursor + 2] || 0);
+      const h = Number(pathArgs[cursor + 3] || 0);
+      cursor += 4;
+      const p1 = transformPdfPoint(x, y, matrix);
+      const p2 = transformPdfPoint(x + w, y, matrix);
+      const p3 = transformPdfPoint(x + w, y + h, matrix);
+      const p4 = transformPdfPoint(x, y + h, matrix);
+      const bounds = pdfBoundsFromPoints([p1, p2, p3, p4]);
+      if (isPdfBoundsOnPage(bounds, pageWidth, pageHeight)) {
+        rectangles.push(bounds);
+        lines.push(normalizePdfLineSegment(p1, p2), normalizePdfLineSegment(p2, p3), normalizePdfLineSegment(p3, p4), normalizePdfLineSegment(p4, p1));
+      }
+      current = p1;
+      firstPoint = p1;
+      return;
+    }
+    if (pathOp === op.closePath) {
+      if (current && firstPoint) lines.push(normalizePdfLineSegment(current, firstPoint));
+      current = firstPoint;
+      return;
+    }
+    if (pathOp === op.curveTo) {
+      cursor += 6;
+      return;
+    }
+    if (pathOp === op.curveTo2 || pathOp === op.curveTo3) {
+      cursor += 4;
+    }
+  });
+
+  return {
+    lines: lines.filter((line) => isPdfDrawableLine(line, pageWidth, pageHeight)),
+    rectangles: rectangles.filter((rect) => isPdfDrawableRect(rect, pageWidth, pageHeight)),
+  };
+}
+
+function drawPdfRebuiltPathStrokes(page, path, graphics, rgb) {
+  if (!path?.lines?.length) return;
+  const color = graphics.strokeColor || { r: 0, g: 0, b: 0 };
+  path.lines.forEach((line) => {
+    page.drawLine({
+      start: { x: line.x1, y: line.y1 },
+      end: { x: line.x2, y: line.y2 },
+      thickness: Math.max(0.2, Math.min(6, Number(graphics.lineWidth || 1))),
+      color: rgb(color.r, color.g, color.b),
+      opacity: 1,
+    });
+  });
+}
+
+function drawPdfRebuiltPathFills(page, path, graphics, rgb) {
+  if (!path?.rectangles?.length) return;
+  const color = graphics.fillColor || { r: 1, g: 1, b: 1 };
+  path.rectangles.forEach((rect) => {
+    page.drawRectangle({
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      color: rgb(color.r, color.g, color.b),
+      opacity: 1,
+    });
+  });
+}
+
+function isPdfDrawableLine(line, pageWidth, pageHeight) {
+  if (!line) return false;
+  const length = Math.hypot(Number(line.x2 || 0) - Number(line.x1 || 0), Number(line.y2 || 0) - Number(line.y1 || 0));
+  const horizontal = Math.abs(Number(line.y1 || 0) - Number(line.y2 || 0)) <= 1.5;
+  const vertical = Math.abs(Number(line.x1 || 0) - Number(line.x2 || 0)) <= 1.5;
+  const insidePage = line.x2 >= -4 && line.y2 >= -4 && line.x1 <= pageWidth + 4 && line.y1 <= pageHeight + 4;
+  return insidePage && length >= 3 && (horizontal || vertical);
+}
+
+function isPdfDrawableRect(rect, pageWidth, pageHeight) {
+  if (!rect) return false;
+  const area = Number(rect.width || 0) * Number(rect.height || 0);
+  if (area < 16) return false;
+  if (rect.width < 1.5 || rect.height < 1.5) return false;
+  return isPdfBoundsOnPage(rect, pageWidth, pageHeight);
+}
+
+function isPdfBoundsOnPage(bounds, pageWidth, pageHeight) {
+  return bounds &&
+    bounds.x + bounds.width >= -4 &&
+    bounds.y + bounds.height >= -4 &&
+    bounds.x <= pageWidth + 4 &&
+    bounds.y <= pageHeight + 4;
+}
+
+function pdfBoundsFromPoints(points) {
+  const xs = points.map((point) => Number(point.x || 0));
+  const ys = points.map((point) => Number(point.y || 0));
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return {
+    x,
+    y,
+    width: Math.max(0, Math.max(...xs) - x),
+    height: Math.max(0, Math.max(...ys) - y),
+  };
+}
+
+async function drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, matrix, pageWidth, pageHeight) {
+  if (!objectId) return;
+  const imageData = await getPdfJsObjectData(sourcePage.objs, objectId) ||
+    await getPdfJsObjectData(sourcePage.commonObjs, objectId);
+  await drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, matrix, pageWidth, pageHeight);
+}
+
+async function drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, matrix, pageWidth, pageHeight) {
+  const imageData = args?.[0]?.data ? args[0] : null;
+  const objectId = typeof args?.[0] === "string" ? args[0] : null;
+  const repeatPositions = Array.isArray(args?.[3]) ? args[3] : null;
+  const positions = repeatPositions || (Array.isArray(args?.[1]) ? args[1] : []);
+  const scaleX = repeatPositions ? Number(args?.[1] || 1) : 1;
+  const scaleY = repeatPositions ? Number(args?.[2] || 1) : 1;
+  if (!positions.length) {
+    if (objectId) await drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, matrix, pageWidth, pageHeight);
+    else if (imageData) await drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, matrix, pageWidth, pageHeight);
+    return;
+  }
+
+  for (let index = 0; index < positions.length; index += 2) {
+    const positionedMatrix = multiplyPdfMatrix(matrix, [scaleX, 0, 0, scaleY, Number(positions[index] || 0), Number(positions[index + 1] || 0)]);
+    if (objectId) await drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, positionedMatrix, pageWidth, pageHeight);
+    else if (imageData) await drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, positionedMatrix, pageWidth, pageHeight);
+  }
+}
+
+function getPdfJsObjectData(store, objectId) {
+  if (!store || !objectId) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const direct = store.get(objectId);
+      if (direct) {
+        resolve(direct);
+        return;
+      }
+    } catch (error) {
+      // Some pdf.js object stores throw until the callback form is used.
+    }
+
+    try {
+      store.get(objectId, (data) => resolve(data || null));
+    } catch (error) {
+      resolve(null);
+    }
+  });
+}
+
+async function drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, matrix, pageWidth, pageHeight) {
+  if (!imageData) return;
+  const bounds = getPdfImageBounds(matrix);
+  if (!isPdfBoundsOnPage(bounds, pageWidth, pageHeight) || bounds.width < 2 || bounds.height < 2) return;
+  const pngBytes = await pdfImageDataToPngBytes(imageData);
+  if (!pngBytes) return;
+  const image = await pdfDoc.embedPng(pngBytes);
+  targetPage.drawImage(image, {
+    x: Math.max(0, bounds.x),
+    y: Math.max(0, bounds.y),
+    width: Math.max(1, Math.min(pageWidth, bounds.width)),
+    height: Math.max(1, Math.min(pageHeight, bounds.height)),
+  });
+}
+
+function getPdfImageBounds(matrix) {
+  return pdfBoundsFromPoints([
+    transformPdfPoint(0, 0, matrix),
+    transformPdfPoint(1, 0, matrix),
+    transformPdfPoint(1, 1, matrix),
+    transformPdfPoint(0, 1, matrix),
+  ]);
+}
+
+async function pdfImageDataToPngBytes(imageData) {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+
+  if (imageData instanceof HTMLCanvasElement) {
+    canvas.width = Math.max(1, imageData.width);
+    canvas.height = Math.max(1, imageData.height);
+    context.drawImage(imageData, 0, 0);
+    return canvasToArrayBuffer(canvas, "image/png");
+  }
+
+  if (typeof ImageBitmap !== "undefined" && imageData instanceof ImageBitmap) {
+    canvas.width = Math.max(1, imageData.width);
+    canvas.height = Math.max(1, imageData.height);
+    context.drawImage(imageData, 0, 0);
+    return canvasToArrayBuffer(canvas, "image/png");
+  }
+
+  if (typeof HTMLImageElement !== "undefined" && imageData instanceof HTMLImageElement) {
+    canvas.width = Math.max(1, imageData.naturalWidth || imageData.width);
+    canvas.height = Math.max(1, imageData.naturalHeight || imageData.height);
+    context.drawImage(imageData, 0, 0);
+    return canvasToArrayBuffer(canvas, "image/png");
+  }
+
+  const width = Number(imageData.width || 0);
+  const height = Number(imageData.height || 0);
+  if (!width || !height) return null;
+  canvas.width = Math.max(1, width);
+  canvas.height = Math.max(1, height);
+
+  const data = imageData.data || imageData;
+  if (data?.length === width * height * 4) {
+    context.putImageData(new ImageData(new Uint8ClampedArray(data), width, height), 0, 0);
+  } else if (data?.length === width * height * 3) {
+    const rgba = new Uint8ClampedArray(width * height * 4);
+    for (let source = 0, target = 0; source < data.length; source += 3, target += 4) {
+      rgba[target] = data[source];
+      rgba[target + 1] = data[source + 1];
+      rgba[target + 2] = data[source + 2];
+      rgba[target + 3] = 255;
+    }
+    context.putImageData(new ImageData(rgba, width, height), 0, 0);
+  } else if (data?.length === width * height) {
+    const rgba = new Uint8ClampedArray(width * height * 4);
+    for (let source = 0, target = 0; source < data.length; source += 1, target += 4) {
+      rgba[target] = data[source];
+      rgba[target + 1] = data[source];
+      rgba[target + 2] = data[source];
+      rgba[target + 3] = 255;
+    }
+    context.putImageData(new ImageData(rgba, width, height), 0, 0);
+  } else {
+    return null;
+  }
+
+  return canvasToArrayBuffer(canvas, "image/png");
 }
 
 function canvasToArrayBuffer(canvas, type, quality) {
@@ -3610,7 +4000,7 @@ async function downloadPdfOverlayTranslation() {
   if (!state.pdfBytes) throw new Error("缺少原 PDF 数据，请重新上传 PDF。");
 
   setProgress(0.18);
-  setStatus("正在打开原始 PDF，并保留图片、表格和页面结构...");
+  setStatus("正在解析原始 PDF，并重建图片、表格、线条等非文字元素...");
   await waitForUiFrame();
   const pdfjs = await loadPdfJs();
   const sourcePdf = await pdfjs.getDocument({ data: state.pdfBytes.slice() }).promise;
@@ -3623,18 +4013,12 @@ async function downloadPdfOverlayTranslation() {
     const sourcePage = await sourcePdf.getPage(pageNumber);
     const pageSize = state.pdfPageSizes.get(`pdf/page-${pageNumber}`) || sourcePage.getViewport({ scale: 1 });
     const page = pdfDoc.addPage([pageSize.width || 595.28, pageSize.height || 841.89]);
-    const background = await renderPdfPageBackgroundForExport(sourcePage, pdfDoc, pageSize);
-    page.drawImage(background.image, {
-      x: 0,
-      y: 0,
-      width: pageSize.width || background.width,
-      height: pageSize.height || background.height,
-    });
+    await rebuildPdfPageNonTextElements(sourcePage, page, pdfDoc, pdfjs, pageSize, rgb);
     pages.push(page);
 
     const ratio = sourcePdf.numPages ? pageNumber / sourcePdf.numPages : 1;
     setProgress(0.18 + ratio * 0.22);
-    setStatus(`正在生成高清页面背景：${pageNumber}/${sourcePdf.numPages}`);
+    setStatus(`正在重建 PDF 非文字元素：${pageNumber}/${sourcePdf.numPages}`);
     await waitForUiFrame();
   }
 
@@ -3644,7 +4028,7 @@ async function downloadPdfOverlayTranslation() {
   const font = await pdfDoc.embedFont(fontBytes, { subset: false });
   const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.layout?.bounds);
   if (!translatedSegments.length) {
-    throw new Error("当前 PDF 段落没有可用于原位覆盖的坐标。请切换为“备用：重排版译文 PDF”。");
+    throw new Error("当前 PDF 段落没有可用于重建版译文 PDF 的坐标。请切换为“备用：重排版译文 PDF”。");
   }
   const overlayPlans = [];
 
@@ -3654,10 +4038,6 @@ async function downloadPdfOverlayTranslation() {
     if (page) {
       const plan = createPdfOverlayPlan(segment, font);
       if (plan) {
-        drawPdfRawTextErasesForSegment(page, segment, rgb);
-        const sourceErase = createPdfSourceErasePlan(segment);
-        if (sourceErase) drawPdfOverlayErase(page, sourceErase, rgb);
-        drawPdfOverlayErase(page, plan, rgb);
         overlayPlans.push({ page, plan });
       }
     }
@@ -3676,7 +4056,7 @@ async function downloadPdfOverlayTranslation() {
   setStatus("正在保存翻译版 PDF，文件较大时可能需要几十秒...");
   await waitForUiFrame();
   setProgress(0.91);
-  setStatus("正在重新绘制 PDF 表格线，修复文字覆盖造成的断线...");
+  setStatus("正在补绘 PDF 表格线，增强重建版表格边框...");
   await waitForUiFrame();
   pages.forEach((page, index) => {
     const cells = state.pdfTableCells.get(`pdf/page-${index + 1}`) || [];
