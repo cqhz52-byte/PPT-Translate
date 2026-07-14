@@ -111,7 +111,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v114";
+const APP_VERSION = "v115";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -1059,6 +1059,10 @@ async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdf
     dependency: OPS.dependency ?? 1,
     setStrokeRGBColor: OPS.setStrokeRGBColor ?? 58,
     setFillRGBColor: OPS.setFillRGBColor ?? 59,
+    setStrokeCMYKColor: OPS.setStrokeCMYKColor ?? 56,
+    setFillCMYKColor: OPS.setFillCMYKColor ?? 57,
+    setStrokeColorN: OPS.setStrokeColorN ?? 60,
+    setFillColorN: OPS.setFillColorN ?? 61,
     setStrokeGray: OPS.setStrokeGray ?? 54,
     setFillGray: OPS.setFillGray ?? 53,
     constructPath: OPS.constructPath ?? 91,
@@ -1140,6 +1144,22 @@ async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdf
       graphics.fillColor = normalizePdfOperatorColor(args, graphics.fillColor);
       continue;
     }
+    if (fn === op.setStrokeCMYKColor) {
+      graphics.strokeColor = normalizePdfOperatorCmyk(args, graphics.strokeColor);
+      continue;
+    }
+    if (fn === op.setFillCMYKColor) {
+      graphics.fillColor = normalizePdfOperatorCmyk(args, graphics.fillColor);
+      continue;
+    }
+    if (fn === op.setStrokeColorN) {
+      graphics.strokeColor = normalizePdfOperatorColorN(args, graphics.strokeColor);
+      continue;
+    }
+    if (fn === op.setFillColorN) {
+      graphics.fillColor = normalizePdfOperatorColorN(args, graphics.fillColor);
+      continue;
+    }
     if (fn === op.setStrokeGray) {
       graphics.strokeColor = normalizePdfOperatorGray(args, graphics.strokeColor);
       continue;
@@ -1170,7 +1190,7 @@ async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdf
       continue;
     }
     if (fn === op.paintImageXObject || fn === op.paintJpegXObject) {
-      await drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, args[0], graphics.matrix, pageWidth, pageHeight);
+      await drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, args[0], graphics.matrix, pageWidth, pageHeight, options);
       continue;
     }
     if (fn === op.paintInlineImageXObject || fn === op.paintImageMaskXObject) {
@@ -1178,7 +1198,7 @@ async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdf
       continue;
     }
     if (fn === op.paintImageXObjectRepeat || fn === op.paintInlineImageXObjectGroup || fn === op.paintImageMaskXObjectGroup) {
-      await drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, graphics.matrix, pageWidth, pageHeight, deadline);
+      await drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, graphics.matrix, pageWidth, pageHeight, options);
       continue;
     }
     if (fn === op.paintSolidColorImageMask) {
@@ -1236,6 +1256,36 @@ function normalizePdfOperatorGray(args, fallback) {
   if (!Array.isArray(args) || !args.length) return fallback || { r: 0, g: 0, b: 0 };
   const value = clampNumber(Number(args[0] || 0), 0, 1);
   return { r: value, g: value, b: value };
+}
+
+function normalizePdfOperatorCmyk(args, fallback) {
+  const values = normalizePdfColorArgs(args);
+  if (values.length < 4) return fallback || { r: 0, g: 0, b: 0 };
+  const max = Math.max(...values.map((value) => Math.abs(Number(value || 0))));
+  const divisor = max > 1 ? (max <= 100 ? 100 : 255) : 1;
+  const c = clampNumber(Number(values[0] || 0) / divisor, 0, 1);
+  const m = clampNumber(Number(values[1] || 0) / divisor, 0, 1);
+  const y = clampNumber(Number(values[2] || 0) / divisor, 0, 1);
+  const k = clampNumber(Number(values[3] || 0) / divisor, 0, 1);
+  return {
+    r: clampNumber(1 - Math.min(1, c + k), 0, 1),
+    g: clampNumber(1 - Math.min(1, m + k), 0, 1),
+    b: clampNumber(1 - Math.min(1, y + k), 0, 1),
+  };
+}
+
+function normalizePdfOperatorColorN(args, fallback) {
+  const values = normalizePdfColorArgs(args);
+  if (values.length >= 4) return normalizePdfOperatorCmyk(values, fallback);
+  if (values.length >= 3) return normalizePdfOperatorColor(values, fallback);
+  if (values.length === 1) return normalizePdfOperatorGray(values, fallback);
+  return fallback || { r: 0, g: 0, b: 0 };
+}
+
+function normalizePdfColorArgs(args) {
+  if (!Array.isArray(args)) return [];
+  if (Array.isArray(args[0])) return args[0].map(Number).filter(Number.isFinite);
+  return args.map(Number).filter(Number.isFinite);
 }
 
 function extractPdfDrawablePath(args, matrix, op, pageWidth, pageHeight) {
@@ -1367,14 +1417,18 @@ function pdfBoundsFromPoints(points) {
   };
 }
 
-async function drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, matrix, pageWidth, pageHeight) {
+async function drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, matrix, pageWidth, pageHeight, options = {}) {
   if (!objectId) return;
-  const imageData = await getPdfJsObjectData(sourcePage.objs, objectId, 900) ||
-    await getPdfJsObjectData(sourcePage.commonObjs, objectId, 900);
-  await drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, matrix, pageWidth, pageHeight);
+  const imageData = await getPdfJsObjectData(sourcePage.objs, objectId, 3600) ||
+    await getPdfJsObjectData(sourcePage.commonObjs, objectId, 3600);
+  const drawn = await drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, matrix, pageWidth, pageHeight);
+  if (!drawn) {
+    await drawPdfRenderedImageFallback(targetPage, pdfDoc, sourcePage, matrix, pageWidth, pageHeight, options);
+  }
 }
 
-async function drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, matrix, pageWidth, pageHeight, deadline = 0) {
+async function drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, matrix, pageWidth, pageHeight, options = {}) {
+  const deadline = Number(options.deadline || 0);
   const imageData = args?.[0]?.data ? args[0] : null;
   const objectId = typeof args?.[0] === "string" ? args[0] : null;
   const repeatPositions = Array.isArray(args?.[3]) ? args[3] : null;
@@ -1382,7 +1436,7 @@ async function drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, ma
   const scaleX = repeatPositions ? Number(args?.[1] || 1) : 1;
   const scaleY = repeatPositions ? Number(args?.[2] || 1) : 1;
   if (!positions.length) {
-    if (objectId) await drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, matrix, pageWidth, pageHeight);
+    if (objectId) await drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, matrix, pageWidth, pageHeight, options);
     else if (imageData) await drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, matrix, pageWidth, pageHeight);
     return;
   }
@@ -1393,7 +1447,7 @@ async function drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, ma
     if (deadline && Date.now() > deadline) return;
     if (index && index % 40 === 0) await waitForUiFrame();
     const positionedMatrix = multiplyPdfMatrix(matrix, [scaleX, 0, 0, scaleY, Number(cappedPositions[index] || 0), Number(cappedPositions[index + 1] || 0)]);
-    if (objectId) await drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, positionedMatrix, pageWidth, pageHeight);
+    if (objectId) await drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, positionedMatrix, pageWidth, pageHeight, options);
     else if (imageData) await drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, positionedMatrix, pageWidth, pageHeight);
   }
 }
@@ -1432,11 +1486,11 @@ function promiseWithTimeout(promise, timeoutMs, fallback = null) {
 }
 
 async function drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, matrix, pageWidth, pageHeight) {
-  if (!imageData) return;
+  if (!imageData) return false;
   const bounds = getPdfImageBounds(matrix);
-  if (!isPdfBoundsOnPage(bounds, pageWidth, pageHeight) || bounds.width < 2 || bounds.height < 2) return;
+  if (!isPdfBoundsOnPage(bounds, pageWidth, pageHeight) || bounds.width < 2 || bounds.height < 2) return false;
   const pngBytes = await pdfImageDataToPngBytes(imageData);
-  if (!pngBytes) return;
+  if (!pngBytes) return false;
   const image = await pdfDoc.embedPng(pngBytes);
   targetPage.drawImage(image, {
     x: Math.max(0, bounds.x),
@@ -1444,6 +1498,52 @@ async function drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, matrix, 
     width: Math.max(1, Math.min(pageWidth, bounds.width)),
     height: Math.max(1, Math.min(pageHeight, bounds.height)),
   });
+  return true;
+}
+
+async function drawPdfRenderedImageFallback(targetPage, pdfDoc, sourcePage, matrix, pageWidth, pageHeight, options = {}) {
+  const bounds = getPdfImageBounds(matrix);
+  if (!isPdfBoundsOnPage(bounds, pageWidth, pageHeight) || bounds.width < 4 || bounds.height < 4) return false;
+  const cropBytes = await renderPdfPageCropToPng(sourcePage, bounds, pageWidth, pageHeight, options);
+  if (!cropBytes) return false;
+  const image = await pdfDoc.embedPng(cropBytes);
+  targetPage.drawImage(image, {
+    x: Math.max(0, bounds.x),
+    y: Math.max(0, bounds.y),
+    width: Math.max(1, Math.min(pageWidth, bounds.width)),
+    height: Math.max(1, Math.min(pageHeight, bounds.height)),
+  });
+  return true;
+}
+
+async function renderPdfPageCropToPng(sourcePage, bounds, pageWidth, pageHeight, options = {}) {
+  const scale = isLikelyMobileDevice() ? 1.35 : 1.8;
+  const cache = options.renderCache || (options.renderCache = new Map());
+  const cacheKey = `${sourcePage.pageNumber || "page"}:${scale}`;
+  let rendered = cache.get(cacheKey);
+  if (!rendered) {
+    const viewport = sourcePage.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(viewport.width));
+    canvas.height = Math.max(1, Math.ceil(viewport.height));
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return null;
+    await sourcePage.render({ canvasContext: context, viewport }).promise;
+    rendered = { canvas, scale };
+    cache.set(cacheKey, rendered);
+  }
+
+  const sourceX = clampNumber(Math.floor(bounds.x * rendered.scale), 0, rendered.canvas.width - 1);
+  const sourceY = clampNumber(Math.floor((pageHeight - bounds.y - bounds.height) * rendered.scale), 0, rendered.canvas.height - 1);
+  const sourceWidth = clampNumber(Math.ceil(bounds.width * rendered.scale), 1, rendered.canvas.width - sourceX);
+  const sourceHeight = clampNumber(Math.ceil(bounds.height * rendered.scale), 1, rendered.canvas.height - sourceY);
+  const crop = document.createElement("canvas");
+  crop.width = sourceWidth;
+  crop.height = sourceHeight;
+  const cropContext = crop.getContext("2d");
+  if (!cropContext) return null;
+  cropContext.drawImage(rendered.canvas, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+  return canvasToArrayBuffer(crop, "image/png");
 }
 
 function getPdfImageBounds(matrix) {
@@ -5176,6 +5276,7 @@ function shouldKeepPdfSourceText(segment) {
     isLikelyPdfArtifactText(segment) ||
     isLikelyPdfHeaderFooterText(segment) ||
     isLikelyPdfPublicationFurniture(segment) ||
+    isLikelyPdfSidebarMetadata(segment) ||
     isLikelyPdfAuthorByline(segment);
 }
 
@@ -5237,7 +5338,35 @@ function isLikelyPdfPublicationFurniture(segment) {
   const inTopFurnitureZone = bounds ? bounds.y > pageHeight * 0.68 : false;
   if (!inTopFurnitureZone) return false;
 
-  return /(?:ScienceDirect|Elsevier|contents lists available|journal homepage|www\.|ISSN|Lung Cancer\s+\d|^Lung Cancer$)/i.test(text);
+  return /(?:ScienceDirect|Elsevier|BMJ|JITC|Journal for ImmunoTherapy|Open access|Hypothesis|contents lists available|journal homepage|www\.|ISSN|doi:|Lung Cancer\s+\d|^Lung Cancer$)/i.test(text);
+}
+
+function isLikelyPdfSidebarMetadata(segment) {
+  if (segment?.type !== "pdf") return false;
+  const text = String(segment.original || "").replace(/\s+/g, " ").trim();
+  if (!text || containsHanCharacters(text)) return false;
+
+  const bounds = segment.layout?.bounds;
+  const pageSize = state.pdfPageSizes.get(segment.path) || {};
+  const pageWidth = Number(pageSize.width || 595.28);
+  const pageHeight = Number(pageSize.height || 841.89);
+  if (!bounds || !pageWidth || !pageHeight) return false;
+
+  const x = Number(bounds.x || 0);
+  const y = Number(bounds.y || 0);
+  const width = Number(bounds.width || 0);
+  const fontSize = Number(segment.layout?.fontSize || 10);
+  const inLeftRail = x < pageWidth * 0.26 && width < pageWidth * 0.24;
+  const inBottomFurniture = y < pageHeight * 0.14;
+  const smallText = fontSize <= 8.8;
+
+  if (!inLeftRail && !inBottomFurniture) return false;
+  if (/^(?:abstract|introduction|methods?|results?|discussion|conclusion)s?$/i.test(text)) return false;
+
+  const metadataPattern = /(?:to cite|cite this|accepted|received|correspondence|email|@|©|copyright|author\(s\)|group|hospital|university|department|institute|license|reuse|commercial|doi:|journal|immunother|cancer|updates|check for updates|contributor|funding|competing interests|patient consent|ethics approval|provenance|data availability|open access|bmj)/i;
+  const mostlyNamesOrAddress = /(?:professor|school|college|wuhan|china|road|avenue|street|tel|fax|^[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+){1,5}$)/i.test(text);
+
+  return smallText && (metadataPattern.test(text) || mostlyNamesOrAddress);
 }
 
 function isLikelyPdfAuthorByline(segment) {
@@ -5362,7 +5491,7 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout 
   const preferred = sourceFontSize;
   const targetWidth = Math.max(4, bounds.width);
   const maxHeight = Math.max(5, bounds.height * (isTableLike ? 0.9 : 0.96));
-  const minSize = Math.max(isTableLike ? 3.8 : 3.2, preferred * (isTableLike ? 0.6 : 0.42));
+  const minSize = Math.max(isTableLike ? 3.4 : 2.8, preferred * (isTableLike ? 0.56 : 0.34));
 
   const textWidthAtPreferred = Math.max(0.1, font.widthOfTextAtSize(text, preferred));
   const estimatedSize = Math.min(preferred, (preferred * targetWidth) / textWidthAtPreferred);
@@ -5391,11 +5520,35 @@ function fitPdfTextSize(text, font, bounds, sourceSize, sourceText = "", layout 
     }
   }
 
-  return { fontSize: minSize, lines: wrapPdfText(text, font, minSize, targetWidth), lineHeight: getPdfLineHeight(minSize, isTableLike) };
+  const fallbackSize = Math.max(2.4, minSize * 0.92);
+  const fallbackLineHeight = getPdfLineHeight(fallbackSize, isTableLike);
+  const fallbackLines = wrapPdfText(text, font, fallbackSize, targetWidth);
+  return {
+    fontSize: fallbackSize,
+    lines: clampPdfLinesToHeight(fallbackLines, font, fallbackSize, fallbackLineHeight, maxHeight, targetWidth),
+    lineHeight: fallbackLineHeight,
+  };
 }
 
 function getPdfLineHeight(size, isTableLike) {
   return size * (isTableLike ? 1.28 : 1.36);
+}
+
+function clampPdfLinesToHeight(lines, font, fontSize, lineHeight, maxHeight, maxWidth) {
+  const baseline = getPdfBaselineOffset(fontSize);
+  const maxLines = Math.max(1, Math.floor((Math.max(1, maxHeight) - fontSize - baseline) / Math.max(1, lineHeight)) + 1);
+  if (lines.length <= maxLines) return lines;
+  const clamped = lines.slice(0, maxLines);
+  clamped[clamped.length - 1] = trimPdfLineToWidth(`${clamped[clamped.length - 1]}...`, font, fontSize, maxWidth);
+  return clamped;
+}
+
+function trimPdfLineToWidth(line, font, fontSize, maxWidth) {
+  let value = String(line || "");
+  while (value.length > 3 && font.widthOfTextAtSize(value, fontSize) > maxWidth) {
+    value = `${value.slice(0, -4)}...`;
+  }
+  return value || "...";
 }
 
 function getPdfBaselineOffset(fontSize) {
