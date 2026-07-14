@@ -276,6 +276,10 @@ h2 {
   text-decoration: none;
 }
 
+.icon-button[hidden] {
+  display: none;
+}
+
 .library-button {
   color: var(--accent);
 }
@@ -292,6 +296,7 @@ h2 {
   color: var(--accent);
 }
 
+.settings-icon,
 .library-icon,
 .app-share-icon,
 .admin-icon {
@@ -304,6 +309,7 @@ h2 {
   stroke-linejoin: round;
 }
 
+.mobile-view-button:hover .settings-icon,
 .library-button:hover .library-icon {
   transform: translateY(1px);
 }

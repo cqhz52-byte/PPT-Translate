@@ -6,8 +6,9 @@ export async function onRequestGet({ request, env }) {
     return json({
       authenticated: Boolean(session),
       phone: session?.phone || "",
+      role: session?.role || "",
     });
   } catch {
-    return json({ authenticated: false, phone: "" });
+    return json({ authenticated: false, phone: "", role: "" });
   }
 }

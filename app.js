@@ -28,6 +28,8 @@ const state = {
   serviceWorkerRegistration: null,
   updatePromptShown: false,
   updateCheckRunning: false,
+  userRole: "",
+  sessionChecked: false,
   pullStartY: 0,
   pullDistance: 0,
   pullCheckReady: false,
@@ -112,7 +114,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v118";
+const APP_VERSION = "v119";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -173,6 +175,8 @@ if ("serviceWorker" in navigator) {
 
 initUpdateChecks();
 decorateActionButtons();
+updateAdminButtonVisibility();
+refreshCurrentUserSession();
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && document.body.classList.contains("is-busy")) {
@@ -518,6 +522,35 @@ async function handleSelectedFiles(files) {
 
 updateFontScaleLabel();
 initializeAppStartup();
+
+async function refreshCurrentUserSession() {
+  try {
+    const response = await fetch("/api/auth/session", {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error(`Session check failed: ${response.status}`);
+    const session = await response.json();
+    state.userRole = session?.role || "";
+  } catch (error) {
+    console.warn("User session check failed", error);
+    state.userRole = "";
+  } finally {
+    state.sessionChecked = true;
+    updateAdminButtonVisibility();
+  }
+}
+
+function isSuperAdmin() {
+  return state.userRole === "admin";
+}
+
+function updateAdminButtonVisibility() {
+  if (!els.adminButton) return;
+  const shouldShow = isSuperAdmin();
+  els.adminButton.hidden = !shouldShow;
+  els.adminButton.disabled = !shouldShow;
+}
 
 async function initializeAppStartup() {
   updateStartupStatus("正在加载应用界面...", "正在准备按钮、文件库和离线能力。", 28);
@@ -4390,6 +4423,15 @@ function getButtonIconSvg(name) {
 }
 
 async function openAdminManagement() {
+  if (!isSuperAdmin()) {
+    await refreshCurrentUserSession();
+  }
+  if (!isSuperAdmin()) {
+    showToast("普通用户没有管理权限。", true);
+    setStatus("普通用户没有管理权限。");
+    return;
+  }
+
   setStatus("正在检查用户管理后台...");
   try {
     const response = await fetch("/api/admin/session", {

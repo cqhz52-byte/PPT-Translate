@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=118">
+    <link rel="stylesheet" href="styles.css?v=119">
     <style>
       .startup-overlay {
         position: fixed;
@@ -101,16 +101,15 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="CuraWay">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v118 · PDF 图区整体保留</p>
+            <p class="version">v119 · 权限入口优化</p>
           </div>
         </div>
         <div class="topbar-actions">
           <div class="mobile-view-switcher">
-            <button class="icon-button mobile-view-button" id="mobileViewButton" type="button" aria-label="切换功能区" aria-expanded="false" aria-controls="mobileViewMenu">
-              <svg class="menu-icon" aria-hidden="true" viewBox="0 0 24 24">
-                <path d="M5 7h14"></path>
-                <path d="M5 12h14"></path>
-                <path d="M5 17h14"></path>
+            <button class="icon-button mobile-view-button" id="mobileViewButton" type="button" aria-label="打开设置菜单" aria-expanded="false" aria-controls="mobileViewMenu">
+              <svg class="settings-icon" aria-hidden="true" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.66V21a2 2 0 0 1-4 0v-.08a1.8 1.8 0 0 0-1.1-1.66 1.8 1.8 0 0 0-1.98.36l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.66-1.1H3a2 2 0 0 1 0-4h.08A1.8 1.8 0 0 0 4.74 8.8a1.8 1.8 0 0 0-.36-1.98l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.8 1.8 0 0 0 1.98.36A1.8 1.8 0 0 0 10.3 2.7V2.6a2 2 0 0 1 4 0v.08a1.8 1.8 0 0 0 1.1 1.66 1.8 1.8 0 0 0 1.98-.36l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.66 1.1H21a2 2 0 0 1 0 4h-.08A1.8 1.8 0 0 0 19.4 15Z"></path>
               </svg>
             </button>
             <div class="mobile-view-menu" id="mobileViewMenu" hidden>
@@ -137,7 +136,7 @@
           <button class="icon-button help-button" id="helpButton" type="button" title="查看帮助" aria-label="查看帮助">
             <span aria-hidden="true">?</span>
           </button>
-          <button class="icon-button admin-button" id="adminButton" type="button" title="用户管理" aria-label="用户管理">
+          <button class="icon-button admin-button" id="adminButton" type="button" title="用户管理" aria-label="用户管理" hidden>
             <svg class="admin-icon" aria-hidden="true" viewBox="0 0 24 24">
               <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"></path>
               <path d="M4.5 20a7.5 7.5 0 0 1 15 0"></path>
@@ -392,13 +391,13 @@
               <li>右上角菜单可切换“翻译、参数、输出、文件库”分区。</li>
               <li>刷新或误触下拉刷新后，会自动恢复上次未导出的当前草稿。</li>
               <li>长文件翻译或 PDF 导出时请保持页面打开，避免锁屏或切到后台。</li>
-              <li>右上角用户头像图标可进入 Cloudflare 用户管理后台；新手机请打开 Cloudflare 正式地址。</li>
+              <li>超级管理员会看到用户管理入口；普通用户不会显示管理权限按钮。</li>
             </ul>
           </section>
         </div>
       </div>
     </dialog>
 
-    <script src="app.js?v=118" type="module"></script>
+    <script src="app.js?v=119" type="module"></script>
   </body>
 </html>
