@@ -111,7 +111,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v111";
+const APP_VERSION = "v112";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -1022,7 +1022,7 @@ async function renderPdfPageSample(page) {
   return { canvas, context, scale };
 }
 
-async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdfjs, pageSize, rgb) {
+async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdfjs, pageSize, rgb, options = {}) {
   const operatorList = await sourcePage.getOperatorList();
   const OPS = pdfjs.OPS || {};
   const fnArray = operatorList.fnArray || [];
@@ -1031,6 +1031,7 @@ async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdf
   const pageHeight = Number(pageSize.height || 841.89);
   const stateStack = [createPdfGraphicsState()];
   let currentPath = null;
+  const deadline = Number(options.deadline || 0);
 
   const op = {
     save: OPS.save ?? 10,
@@ -1073,6 +1074,11 @@ async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdf
   };
 
   for (let index = 0; index < fnArray.length; index += 1) {
+    if (deadline && Date.now() > deadline) {
+      console.warn("PDF page rebuild skipped remaining operators after time budget.");
+      return;
+    }
+    if (index && index % 80 === 0) await waitForUiFrame();
     const fn = fnArray[index];
     const args = argsArray[index] || [];
     const graphics = stateStack[stateStack.length - 1];
@@ -1154,7 +1160,7 @@ async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdf
       continue;
     }
     if (fn === op.paintImageXObjectRepeat || fn === op.paintInlineImageXObjectGroup || fn === op.paintImageMaskXObjectGroup) {
-      await drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, graphics.matrix, pageWidth, pageHeight);
+      await drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, graphics.matrix, pageWidth, pageHeight, deadline);
       continue;
     }
     if (fn === op.paintSolidColorImageMask) {
@@ -1174,8 +1180,8 @@ async function waitForPdfJsDependencies(sourcePage, args) {
   const ids = Array.isArray(args?.[0]) ? args[0] : (Array.isArray(args) ? args : []);
   const waits = ids
     .filter((id) => typeof id === "string")
-    .map((id) => getPdfJsObjectData(sourcePage.objs, id).then((data) => data || getPdfJsObjectData(sourcePage.commonObjs, id)));
-  if (waits.length) await Promise.all(waits);
+    .map((id) => getPdfJsObjectData(sourcePage.objs, id, 500).then((data) => data || getPdfJsObjectData(sourcePage.commonObjs, id, 500)));
+  if (waits.length) await promiseWithTimeout(Promise.allSettled(waits), 1200, []);
 }
 
 function createPdfGraphicsState() {
@@ -1345,12 +1351,12 @@ function pdfBoundsFromPoints(points) {
 
 async function drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, matrix, pageWidth, pageHeight) {
   if (!objectId) return;
-  const imageData = await getPdfJsObjectData(sourcePage.objs, objectId) ||
-    await getPdfJsObjectData(sourcePage.commonObjs, objectId);
+  const imageData = await getPdfJsObjectData(sourcePage.objs, objectId, 900) ||
+    await getPdfJsObjectData(sourcePage.commonObjs, objectId, 900);
   await drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, matrix, pageWidth, pageHeight);
 }
 
-async function drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, matrix, pageWidth, pageHeight) {
+async function drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, matrix, pageWidth, pageHeight, deadline = 0) {
   const imageData = args?.[0]?.data ? args[0] : null;
   const objectId = typeof args?.[0] === "string" ? args[0] : null;
   const repeatPositions = Array.isArray(args?.[3]) ? args[3] : null;
@@ -1363,16 +1369,20 @@ async function drawPdfRebuiltImageGroup(targetPage, pdfDoc, sourcePage, args, ma
     return;
   }
 
-  for (let index = 0; index < positions.length; index += 2) {
-    const positionedMatrix = multiplyPdfMatrix(matrix, [scaleX, 0, 0, scaleY, Number(positions[index] || 0), Number(positions[index + 1] || 0)]);
+  const maxPositionValues = isLikelyMobileDevice() ? 120 : 240;
+  const cappedPositions = positions.slice(0, maxPositionValues);
+  for (let index = 0; index < cappedPositions.length; index += 2) {
+    if (deadline && Date.now() > deadline) return;
+    if (index && index % 40 === 0) await waitForUiFrame();
+    const positionedMatrix = multiplyPdfMatrix(matrix, [scaleX, 0, 0, scaleY, Number(cappedPositions[index] || 0), Number(cappedPositions[index + 1] || 0)]);
     if (objectId) await drawPdfRebuiltImage(targetPage, pdfDoc, sourcePage, objectId, positionedMatrix, pageWidth, pageHeight);
     else if (imageData) await drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, positionedMatrix, pageWidth, pageHeight);
   }
 }
 
-function getPdfJsObjectData(store, objectId) {
+function getPdfJsObjectData(store, objectId, timeoutMs = 900) {
   if (!store || !objectId) return Promise.resolve(null);
-  return new Promise((resolve) => {
+  return promiseWithTimeout(new Promise((resolve) => {
     try {
       const direct = store.get(objectId);
       if (direct) {
@@ -1388,6 +1398,18 @@ function getPdfJsObjectData(store, objectId) {
     } catch (error) {
       resolve(null);
     }
+  }), timeoutMs, null);
+}
+
+function promiseWithTimeout(promise, timeoutMs, fallback = null) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = window.setTimeout(() => resolve(fallback), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) window.clearTimeout(timer);
   });
 }
 
@@ -4299,12 +4321,25 @@ async function downloadPdfOverlayTranslation() {
     const sourcePage = await sourcePdf.getPage(pageNumber);
     const pageSize = state.pdfPageSizes.get(`pdf/page-${pageNumber}`) || sourcePage.getViewport({ scale: 1 });
     const page = pdfDoc.addPage([pageSize.width || 595.28, pageSize.height || 841.89]);
-    await rebuildPdfPageNonTextElements(sourcePage, page, pdfDoc, pdfjs, pageSize, rgb);
+    const startRatio = sourcePdf.numPages ? (pageNumber - 1) / sourcePdf.numPages : 0;
+    setProgress(0.18 + startRatio * 0.22);
+    setStatus(`正在重建 PDF 非文字元素：第 ${pageNumber}/${sourcePdf.numPages} 页（复杂图片会自动跳过，避免卡住）`);
+    await waitForUiFrame();
+    try {
+      const pageBudgetMs = isLikelyMobileDevice() ? 8500 : 13500;
+      await rebuildPdfPageNonTextElements(sourcePage, page, pdfDoc, pdfjs, pageSize, rgb, {
+        deadline: Date.now() + pageBudgetMs,
+      });
+    } catch (error) {
+      console.warn(`PDF page ${pageNumber} non-text rebuild failed`, error);
+      setStatus(`第 ${pageNumber} 页部分图片或复杂元素重建超时，正在继续写入译文...`);
+      await waitForUiFrame();
+    }
     pages.push(page);
 
     const ratio = sourcePdf.numPages ? pageNumber / sourcePdf.numPages : 1;
     setProgress(0.18 + ratio * 0.22);
-    setStatus(`正在重建 PDF 非文字元素：${pageNumber}/${sourcePdf.numPages}`);
+    setStatus(`已完成 PDF 非文字元素重建：${pageNumber}/${sourcePdf.numPages}`);
     await waitForUiFrame();
   }
 
