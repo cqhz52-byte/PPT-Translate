@@ -111,7 +111,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v115";
+const APP_VERSION = "v116";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -1516,6 +1516,29 @@ async function drawPdfRenderedImageFallback(targetPage, pdfDoc, sourcePage, matr
   return true;
 }
 
+async function drawPdfPreservedPageFurniture(sourcePage, targetPage, pdfDoc, pageSize, options = {}) {
+  const pageWidth = Number(pageSize.width || 595.28);
+  const pageHeight = Number(pageSize.height || 841.89);
+  const topHeight = Math.min(58, Math.max(42, pageHeight * 0.065));
+  const bottomHeight = Math.min(46, Math.max(34, pageHeight * 0.052));
+  const regions = [
+    { x: 0, y: pageHeight - topHeight, width: pageWidth, height: topHeight },
+    { x: 0, y: 0, width: pageWidth, height: bottomHeight },
+  ];
+
+  for (const region of regions) {
+    const pngBytes = await renderPdfPageCropToPng(sourcePage, region, pageWidth, pageHeight, options);
+    if (!pngBytes) continue;
+    const image = await pdfDoc.embedPng(pngBytes);
+    targetPage.drawImage(image, {
+      x: region.x,
+      y: region.y,
+      width: region.width,
+      height: region.height,
+    });
+  }
+}
+
 async function renderPdfPageCropToPng(sourcePage, bounds, pageWidth, pageHeight, options = {}) {
   const scale = isLikelyMobileDevice() ? 1.35 : 1.8;
   const cache = options.renderCache || (options.renderCache = new Map());
@@ -2146,6 +2169,7 @@ function getPdfLineColumnKey(line, pageWidth) {
   const width = Number(bounds.width || 0);
   const center = x + width / 2;
 
+  if (x < pageWidth * 0.23 && width < pageWidth * 0.26) return "side";
   if (width >= pageWidth * 0.58) return "full";
   if (x <= pageWidth * 0.16 && width >= pageWidth * 0.46) return "full";
   if (center < pageWidth * 0.52) return "left";
@@ -2169,6 +2193,7 @@ function createPdfTextBlock(line) {
 function shouldStartNewPdfTextBlock(block, line, pageWidth, pageHeight) {
   if (!block?.lines?.length) return true;
   if (line.columnKey !== block.columnKey) return true;
+  if (shouldMergePdfTitleLine(block, line, pageWidth, pageHeight)) return false;
   if (isPdfStandaloneTextLine(line, pageWidth, pageHeight)) return true;
 
   const previous = block.lines[block.lines.length - 1];
@@ -2198,6 +2223,38 @@ function shouldStartNewPdfTextBlock(block, line, pageWidth, pageHeight) {
 
   if (looksLikePdfSectionHeading(lineText, line, pageWidth)) return true;
   return false;
+}
+
+function shouldMergePdfTitleLine(block, line, pageWidth, pageHeight) {
+  const previous = block.lines[block.lines.length - 1];
+  if (!isPdfMainTitleLine(previous, pageWidth, pageHeight) || !isPdfMainTitleLine(line, pageWidth, pageHeight)) return false;
+  const previousBounds = previous.bounds || {};
+  const lineBounds = line.bounds || {};
+  const previousFont = Number(previous.fontSize || previousBounds.height || 0);
+  const lineFont = Number(line.fontSize || lineBounds.height || 0);
+  const baselineGap = Number(previousBounds.y || 0) - Number(lineBounds.y || 0);
+  const xDelta = Math.abs(Number(previousBounds.x || 0) - Number(lineBounds.x || 0));
+  const fontDelta = Math.abs(previousFont - lineFont);
+  return baselineGap > 0 &&
+    baselineGap < Math.max(previousFont, lineFont) * 1.75 &&
+    xDelta < Math.max(18, lineFont * 1.2) &&
+    fontDelta < Math.max(2.2, Math.min(previousFont, lineFont) * 0.18) &&
+    block.lines.length < 9;
+}
+
+function isPdfMainTitleLine(line, pageWidth, pageHeight) {
+  const bounds = line?.bounds || {};
+  const text = String(line?.text || "").replace(/\s+/g, " ").trim();
+  if (!text || text.length < 8) return false;
+  const y = Number(bounds.y || 0);
+  const x = Number(bounds.x || 0);
+  const width = Number(bounds.width || 0);
+  const fontSize = Number(line?.fontSize || bounds.height || 0);
+  return fontSize >= 14 &&
+    y > pageHeight * 0.48 &&
+    y < pageHeight * 0.9 &&
+    x > pageWidth * 0.16 &&
+    width > pageWidth * 0.22;
 }
 
 function isPdfStandaloneTextLine(line, pageWidth, pageHeight) {
@@ -2286,7 +2343,7 @@ function finalizePdfTextBlock(block, pageWidth) {
   const columnWidth = estimatePdfColumnWidth(block.lines, pageWidth);
   const widthP85 = lineWidths.length ? lineWidths[Math.min(lineWidths.length - 1, Math.floor(lineWidths.length * 0.85))] : block.bounds.width;
   const targetWidth = Math.max(block.bounds.width, widthP85, columnWidth * 0.82);
-  const rightLimit = block.columnKey === "left" ? pageWidth * 0.51 : pageWidth - 24;
+  const rightLimit = block.columnKey === "side" ? pageWidth * 0.25 : (block.columnKey === "left" ? pageWidth * 0.51 : pageWidth - 24);
   const boundedWidth = block.columnKey === "full"
     ? Math.min(targetWidth, pageWidth - block.bounds.x - 24)
     : Math.min(targetWidth, rightLimit - block.bounds.x);
@@ -2316,6 +2373,7 @@ function estimatePdfColumnWidth(lines, pageWidth) {
   const columnKey = first?.columnKey || getPdfLineColumnKey(first, pageWidth);
 
   if (columnKey === "full") return Math.min(pageWidth - 48, Math.max(widest, Number(first?.availableWidth || 0)));
+  if (columnKey === "side") return Math.min(pageWidth * 0.22, Math.max(widest, pageWidth * 0.16));
   return Math.min(pageWidth * 0.46, Math.max(widest, pageWidth * 0.36));
 }
 
@@ -4515,14 +4573,17 @@ async function downloadPdfOverlayTranslation() {
     const pageSize = state.pdfPageSizes.get(`pdf/page-${pageNumber}`) || sourcePage.getViewport({ scale: 1 });
     const page = pdfDoc.addPage([pageSize.width || 595.28, pageSize.height || 841.89]);
     const startRatio = sourcePdf.numPages ? (pageNumber - 1) / sourcePdf.numPages : 0;
+    const pageRenderOptions = { renderCache: new Map() };
     setProgress(0.18 + startRatio * 0.22);
     setStatus(`正在重建 PDF 非文字元素：第 ${pageNumber}/${sourcePdf.numPages} 页（复杂图片会自动跳过，避免卡住）`);
     await waitForUiFrame();
     try {
       const pageBudgetMs = isLikelyMobileDevice() ? 8500 : 13500;
       await rebuildPdfPageNonTextElements(sourcePage, page, pdfDoc, pdfjs, pageSize, rgb, {
+        ...pageRenderOptions,
         deadline: Date.now() + pageBudgetMs,
       });
+      await drawPdfPreservedPageFurniture(sourcePage, page, pdfDoc, pageSize, pageRenderOptions);
     } catch (error) {
       console.warn(`PDF page ${pageNumber} non-text rebuild failed`, error);
       setStatus(`第 ${pageNumber} 页部分图片或复杂元素重建超时，正在继续写入译文...`);
@@ -4628,7 +4689,10 @@ function createPdfOverlayPlan(segment, font) {
   const textHeight = getPdfTextBlockHeight(lines, fontSize, lineHeight);
   const fitY = isTableLike ? Math.max(0, sourceBounds.y - Math.max(0, (fitBounds.height - sourceBounds.height) / 2)) : sourceBounds.y;
   const baselineOffset = getPdfBaselineOffset(fontSize);
-  let y = fitY + Math.max(0, (fitBounds.height - textHeight) / 2) + baselineOffset + (lines.length - 1) * lineHeight;
+  const isTitleLike = isPdfTitleSegment(segment);
+  let y = isTitleLike
+    ? fitY + fitBounds.height - fontSize + baselineOffset
+    : fitY + Math.max(0, (fitBounds.height - textHeight) / 2) + baselineOffset + (lines.length - 1) * lineHeight;
 
   return {
     erase: {
@@ -4644,9 +4708,27 @@ function createPdfOverlayPlan(segment, font) {
     lineHeight,
     textColor,
     cellAlign: segment.layout.cellAlign,
+    isTitleLike,
     isTableLike,
     y,
   };
+}
+
+function isPdfTitleSegment(segment) {
+  if (segment?.type !== "pdf") return false;
+  const bounds = segment.layout?.bounds || {};
+  const pageSize = state.pdfPageSizes.get(segment.path) || {};
+  const pageWidth = Number(pageSize.width || 595.28);
+  const pageHeight = Number(pageSize.height || 841.89);
+  const fontSize = Number(segment.layout?.fontSize || 0);
+  const x = Number(bounds.x || 0);
+  const y = Number(bounds.y || 0);
+  const width = Number(bounds.width || 0);
+  return fontSize >= 13.5 &&
+    x > pageWidth * 0.16 &&
+    y > pageHeight * 0.45 &&
+    y < pageHeight * 0.88 &&
+    width > pageWidth * 0.25;
 }
 
 function createPdfSourceErasePlan(segment) {
@@ -5362,6 +5444,7 @@ function isLikelyPdfSidebarMetadata(segment) {
 
   if (!inLeftRail && !inBottomFurniture) return false;
   if (/^(?:abstract|introduction|methods?|results?|discussion|conclusion)s?$/i.test(text)) return false;
+  if (segment.layout?.columnKey === "side" && smallText) return true;
 
   const metadataPattern = /(?:to cite|cite this|accepted|received|correspondence|email|@|©|copyright|author\(s\)|group|hospital|university|department|institute|license|reuse|commercial|doi:|journal|immunother|cancer|updates|check for updates|contributor|funding|competing interests|patient consent|ethics approval|provenance|data availability|open access|bmj)/i;
   const mostlyNamesOrAddress = /(?:professor|school|college|wuhan|china|road|avenue|street|tel|fax|^[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+){1,5}$)/i.test(text);
