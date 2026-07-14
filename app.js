@@ -109,7 +109,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v105";
+const APP_VERSION = "v106";
 const VERSION_URL = "./version.json";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const PULL_UPDATE_THRESHOLD = 76;
@@ -145,7 +145,7 @@ if ("serviceWorker" in navigator) {
     window.location.reload();
   });
 
-  navigator.serviceWorker.register("sw.js?v=80").then((registration) => {
+  navigator.serviceWorker.register("sw.js?v=81").then((registration) => {
     state.serviceWorkerRegistration = registration;
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
@@ -636,25 +636,6 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
   state.pdfParsedMarkdown = "";
   state.pdfParsedPages = [];
 
-  let parsed = null;
-  try {
-    setProgress(0.04);
-    setStatus("正在调用 Cloudflare 后端解析 PDF，支持 OCR、表格和段落结构...");
-    await waitForUiFrame();
-    parsed = await parsePdfWithBackend(file);
-    if (state.loadToken !== loadToken) return;
-    if (parsed?.markdown || parsed?.pages?.length) {
-      state.pdfParseSource = parsed.source || "llamaparse";
-      state.pdfParsedMarkdown = parsed.markdown || "";
-      state.pdfParsedPages = parsed.pages || [];
-    }
-  } catch (error) {
-    console.warn("Backend PDF parsing unavailable; falling back to pdf.js", error);
-    if (state.loadToken !== loadToken) return;
-    setStatus(`后端 PDF 解析不可用，已回退浏览器兼容解析：${error.message || "未知错误"}`);
-    await waitForUiFrame();
-  }
-
   let pdfReferenceSectionStarted = false;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
@@ -714,16 +695,45 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
     });
   }
 
-  const structuredSegments = createPdfStructuredSegmentsFromLlamaParse();
-  if (structuredSegments.length) {
-    state.segments = structuredSegments;
-    state.pdfParseSource = state.pdfParseSource || "llamaparse";
-    setStatus(`已使用 Cloudflare 后端解析 PDF，识别到 ${structuredSegments.length} 个结构化段落。`);
+  if (state.segments.length) {
+    setPdfOutputMode("overlay", { persist: true });
+  } else {
+    await loadPdfWithBackendFallback(file, loadToken);
   }
 
   if (!state.segments.length) {
     throw new Error("这个 PDF 没有可提取的文本。若是扫描版 PDF，请确认 Cloudflare 已配置 LLAMAPARSE_API_KEY 后再试。");
   }
+}
+
+async function loadPdfWithBackendFallback(file, loadToken) {
+  let parsed = null;
+  try {
+    setProgress(0.82);
+    setStatus("浏览器未提取到可选文字，正在调用 Cloudflare 后端 OCR/结构化解析...");
+    await waitForUiFrame();
+    parsed = await parsePdfWithBackend(file);
+    if (state.loadToken !== loadToken) return;
+  } catch (error) {
+    console.warn("Backend PDF parsing unavailable", error);
+    if (state.loadToken !== loadToken) return;
+    setStatus(`后端 PDF 解析不可用：${error.message || "未知错误"}`);
+    return;
+  }
+
+  if (parsed?.markdown || parsed?.pages?.length) {
+    state.pdfParseSource = parsed.source || "llamaparse";
+    state.pdfParsedMarkdown = parsed.markdown || "";
+    state.pdfParsedPages = parsed.pages || [];
+  }
+
+  const structuredSegments = createPdfStructuredSegmentsFromLlamaParse();
+  if (!structuredSegments.length) return;
+
+  state.segments = structuredSegments;
+  const hasOverlayCoordinates = structuredSegments.some((segment) => segment.layout?.bounds);
+  setPdfOutputMode(hasOverlayCoordinates ? "overlay" : "reflow", { persist: true });
+  setStatus(`已使用 Cloudflare 后端解析 PDF，识别到 ${structuredSegments.length} 个结构化段落。`);
 }
 
 async function parsePdfWithBackend(file) {
@@ -3167,7 +3177,7 @@ function renderPreview() {
 }
 
 async function downloadPdfTranslation() {
-  const mode = els.pdfOutputMode?.value || "reflow";
+  const mode = els.pdfOutputMode?.value || "overlay";
   if (mode === "overlay") return downloadPdfOverlayTranslation();
   return downloadPdfReflowTranslation();
 }
@@ -3370,7 +3380,7 @@ async function downloadPdfOverlayTranslation() {
   const font = await pdfDoc.embedFont(fontBytes, { subset: false });
   const translatedSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.layout?.bounds);
   if (!translatedSegments.length) {
-    throw new Error("当前 PDF 段落没有可用于原位覆盖的坐标。请使用“推荐：重排版译文 PDF”，或关闭后端结构化解析后重新导入。");
+    throw new Error("当前 PDF 段落没有可用于原位覆盖的坐标。请切换为“备用：重排版译文 PDF”。");
   }
   const overlayPlans = [];
 
@@ -4722,10 +4732,19 @@ async function resetApp(clearInput = true, options = {}) {
 
 function buildOutputName(name) {
   if (state.fileType === "pdf") {
-    const mode = els.pdfOutputMode?.value === "overlay" ? "overlay" : "reflow";
+    const mode = els.pdfOutputMode?.value === "reflow" ? "reflow" : "overlay";
     return name.replace(/\.pdf$/i, "") + `-translated-${mode}.pdf`;
   }
   return name.replace(/\.(pptx|docx)$/i, "") + `-translated.${state.fileType || "pptx"}`;
+}
+
+function setPdfOutputMode(mode, options = {}) {
+  if (!els.pdfOutputMode) return;
+  const normalized = mode === "reflow" ? "reflow" : "overlay";
+  if (els.pdfOutputMode.value !== normalized) {
+    els.pdfOutputMode.value = normalized;
+  }
+  if (options.persist) saveSettings();
 }
 
 function normalizeTranslation(translation, source, segment = null) {
@@ -5596,7 +5615,7 @@ function saveSettings() {
     summaryDetail: els.summaryDetail?.value || "standard",
     modelName: els.modelName?.value || "",
     apiKey: els.apiKey?.value || "",
-    pdfOutputMode: els.pdfOutputMode?.value || "reflow",
+    pdfOutputMode: els.pdfOutputMode?.value || "overlay",
   };
 
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
