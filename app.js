@@ -111,7 +111,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v116";
+const APP_VERSION = "v117";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -1502,7 +1502,7 @@ async function drawPdfRebuiltInlineImage(targetPage, pdfDoc, imageData, matrix, 
 }
 
 async function drawPdfRenderedImageFallback(targetPage, pdfDoc, sourcePage, matrix, pageWidth, pageHeight, options = {}) {
-  const bounds = getPdfImageBounds(matrix);
+  const bounds = expandPdfImageFallbackBounds(getPdfImageBounds(matrix), pageWidth, pageHeight);
   if (!isPdfBoundsOnPage(bounds, pageWidth, pageHeight) || bounds.width < 4 || bounds.height < 4) return false;
   const cropBytes = await renderPdfPageCropToPng(sourcePage, bounds, pageWidth, pageHeight, options);
   if (!cropBytes) return false;
@@ -1514,6 +1514,22 @@ async function drawPdfRenderedImageFallback(targetPage, pdfDoc, sourcePage, matr
     height: Math.max(1, Math.min(pageHeight, bounds.height)),
   });
   return true;
+}
+
+function expandPdfImageFallbackBounds(bounds, pageWidth, pageHeight) {
+  if (!bounds) return bounds;
+  const padX = Math.max(4, Math.min(18, Number(bounds.width || 0) * 0.035));
+  const padY = Math.max(3, Math.min(14, Number(bounds.height || 0) * 0.028));
+  const x = Math.max(0, Number(bounds.x || 0) - padX);
+  const y = Math.max(0, Number(bounds.y || 0) - padY);
+  const right = Math.min(pageWidth, Number(bounds.x || 0) + Number(bounds.width || 0) + padX);
+  const top = Math.min(pageHeight, Number(bounds.y || 0) + Number(bounds.height || 0) + padY);
+  return {
+    x,
+    y,
+    width: Math.max(1, right - x),
+    height: Math.max(1, top - y),
+  };
 }
 
 async function drawPdfPreservedPageFurniture(sourcePage, targetPage, pdfDoc, pageSize, options = {}) {
@@ -5335,7 +5351,9 @@ function drawPdfOverlayText(page, plan, font, rgb) {
 }
 
 function getPdfExportText(segment) {
-  if (shouldKeepPdfSourceText(segment)) return "";
+  if (shouldKeepPdfSourceText(segment)) {
+    return shouldRedrawKeptPdfSourceText(segment) ? sanitizePdfExportText(segment.original) : "";
+  }
 
   const text = sanitizePdfExportText(applyTerminologyRules(String(segment.translation || "").trim(), segment.original));
   if (!text) return "";
@@ -5351,6 +5369,15 @@ function getPdfExportText(segment) {
   }
 
   return text;
+}
+
+function shouldRedrawKeptPdfSourceText(segment) {
+  if (!segment || isLikelyPdfHeaderFooterText(segment) || isLikelyPdfPublicationFurniture(segment) || isLikelyPdfArtifactText(segment)) {
+    return false;
+  }
+  return Boolean(segment?.layout?.isReferenceText) ||
+    isLikelyPdfSidebarMetadata(segment) ||
+    isLikelyPdfAuthorByline(segment);
 }
 
 function shouldKeepPdfSourceText(segment) {
