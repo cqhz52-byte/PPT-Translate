@@ -1,4 +1,4 @@
 {
-  "version": "v105",
-  "message": "发现新版本 v105：新增 Cloudflare 后端 PDF 结构化解析、管理员 LlamaParse Key 管理，以及 PDF 重排版/原位覆盖双导出模式。"
+  "version": "v106",
+  "message": "发现新版本 v106：PDF 翻译改为原格式优先，普通可复制文字 PDF 默认原位覆盖导出，避免重排版导致页数暴涨。"
 }

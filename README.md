@@ -93,10 +93,10 @@ LLAMAPARSE_API_KEY=你的 LlamaParse / LlamaCloud API Key
 
 也可以由超级管理员登录 `/admin`，在“LlamaParse PDF 解析 Key”区域直接输入并保存。后台会把 Key 写入 `PHONE_AUTH_KV` 的 `app:llamaparse_api_key`，普通授权用户无法通过网页端读取明文 Key。
 
-启用后，PDF 导入会先请求 `/api/pdf-parse`，由 Cloudflare Pages Functions 上传 PDF 到 LlamaParse 并取回结构化结果；如果后端未配置或解析失败，前端会自动回退到浏览器内置的 pdf.js 兼容解析。PDF 导出支持两种模式：
+启用后，普通可复制文字 PDF 会优先使用浏览器内置的 pdf.js 坐标解析，以便按原 PDF 页面位置覆盖写入译文并尽量保留原格式；只有当浏览器无法提取可选文字时，才会请求 `/api/pdf-parse`，由 Cloudflare Pages Functions 上传 PDF 到 LlamaParse 做 OCR/结构化解析。PDF 导出支持两种模式：
 
-- 推荐：重排版译文 PDF。优先使用 LlamaParse 的段落、表格、OCR 文本重新排版，稳定性最高。
-- 兼容：原 PDF 原位覆盖。继续保留原 PDF 页面背景，在原文字坐标处遮盖并写入译文；复杂背景、文字长度变化或没有坐标的结构化解析段落仍可能不适合此模式。
+- 推荐：原 PDF 原位覆盖。继续保留原 PDF 页面背景，在原文字坐标处遮盖并写入译文，尽量保持原页面数量和格式。
+- 备用：重排版译文 PDF。适合扫描版、OCR 或没有可靠坐标的 PDF，但页数可能不同于原文。
 
 可选：如果你想继续用命令行管理，也可以设置 `ADMIN_TOKEN`，然后调用管理接口：
 
