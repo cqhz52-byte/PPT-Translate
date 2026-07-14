@@ -8,6 +8,7 @@ const state = {
   slideVisuals: new Map(),
   pdfPageSizes: new Map(),
   pdfTableCells: new Map(),
+  pdfEraseFragments: new Map(),
   pdfBytes: null,
   pdfParseSource: "",
   pdfParsedMarkdown: "",
@@ -522,6 +523,7 @@ async function loadOfficeFile(file, options = {}) {
     state.slideVisuals = new Map();
     state.pdfPageSizes = new Map();
     state.pdfTableCells = new Map();
+    state.pdfEraseFragments = new Map();
     state.pdfBytes = null;
     state.pdfParseSource = "";
     state.pdfParsedMarkdown = "";
@@ -661,12 +663,14 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
     const pageHeight = viewport.height || 841.89;
     const content = await page.getTextContent();
     if (state.loadToken !== loadToken) return;
+    state.pdfEraseFragments.set(`pdf/page-${pageNumber}`, extractPdfTextEraseFragments(content.items));
     const lines = extractPdfLineSegments(content.items, pageWidth);
+    const blocks = groupPdfLineSegmentsIntoBlocks(lines, pageWidth, pageHeight);
     const referenceContext = getPdfReferenceContext(lines, pageHeight, pdfReferenceSectionStarted);
     pdfReferenceSectionStarted = pdfReferenceSectionStarted || referenceContext.startedOnPage;
-    lines.forEach((line, index) => {
-      const tableCell = findPdfTableCell(line.bounds, tableCells);
-      const sampledBackground = samplePdfBackgroundColor(pageSample, line.bounds, pageWidth, pageHeight);
+    blocks.forEach((block, index) => {
+      const tableCell = findPdfTableCell(block.bounds, tableCells);
+      const sampledBackground = samplePdfBackgroundColor(pageSample, block.bounds, pageWidth, pageHeight);
       const backgroundColor = normalizePdfBackgroundColor(sampledBackground, Boolean(tableCell));
       state.segments.push({
         id: `pdf-${pageNumber}-${index}`,
@@ -677,19 +681,21 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
         paragraphIndex: index,
         textNodeCount: 1,
         layout: {
-          bounds: line.bounds,
-          fontSize: line.fontSize,
-          availableWidth: tableCell ? Math.max(line.availableWidth, tableCell.width - 4) : line.availableWidth,
-          availableHeight: tableCell ? Math.max(line.availableHeight, tableCell.height - 4) : line.availableHeight,
-          rowSegmentCount: tableCell ? Math.max(2, line.rowSegmentCount) : line.rowSegmentCount,
+          bounds: block.bounds,
+          fontSize: block.fontSize,
+          availableWidth: tableCell ? Math.max(block.availableWidth, tableCell.width - 4) : block.availableWidth,
+          availableHeight: tableCell ? Math.max(block.availableHeight, tableCell.height - 4) : block.availableHeight,
+          rowSegmentCount: tableCell ? Math.max(2, block.rowSegmentCount) : block.rowSegmentCount,
+          lineCount: block.lineCount || 1,
+          columnKey: block.columnKey || "",
           tableCell,
-          cellAlign: tableCell ? inferPdfCellAlign(line.bounds, tableCell, line.text) : "",
+          cellAlign: tableCell ? inferPdfCellAlign(block.bounds, tableCell, block.text) : "",
           backgroundColor,
           textColor: getReadablePdfTextColor(backgroundColor),
-          isReferenceText: isPdfReferenceLine(line, referenceContext, pageWidth, pageHeight),
+          isReferenceText: isPdfReferenceLine(block, referenceContext, pageWidth, pageHeight),
         },
         overrides: createSegmentOverrides(),
-        original: line.text,
+        original: block.text,
         translation: "",
       });
     });
@@ -1261,6 +1267,30 @@ function extractPdfLineSegments(items, pageWidth = 595.28) {
     .filter((line) => line.text);
 }
 
+function extractPdfTextEraseFragments(items) {
+  return (items || [])
+    .map((item) => {
+      const text = String(item?.str || "").trim();
+      if (!text) return null;
+
+      const transform = item.transform || [];
+      const x = Number(transform[4] || 0);
+      const y = Number(transform[5] || 0);
+      const height = Math.max(6, Math.abs(Number(transform[3] || item.height || 10)));
+      const width = Math.max(1, Number(item.width || 0));
+      return {
+        text,
+        bounds: {
+          x,
+          y: y - height * 0.3,
+          width,
+          height: Math.max(7, height * 1.42),
+        },
+      };
+    })
+    .filter(Boolean);
+}
+
 function getPdfReferenceContext(lines, pageHeight, alreadyStarted = false) {
   const heading = lines.find((line) => isPdfReferencesHeading(line.text));
 
@@ -1318,7 +1348,7 @@ function splitPdfRowIntoSegments(row, pageWidth, rowGap = 0) {
   sorted.forEach((item) => {
     const previous = current[current.length - 1];
     const gap = previous ? item.x - (previous.x + previous.width) : 0;
-    if (previous && (previous.hasEol || gap > gapThreshold)) {
+    if (previous && (previous.hasEol || shouldSplitPdfRowGroup(previous, item, gap, gapThreshold, pageWidth))) {
       groups.push(current);
       current = [];
     }
@@ -1364,6 +1394,240 @@ function splitPdfRowIntoSegments(row, pageWidth, rowGap = 0) {
       },
     };
   });
+}
+
+function shouldSplitPdfRowGroup(previous, item, gap, gapThreshold, pageWidth) {
+  if (gap <= gapThreshold) return false;
+
+  const previousRight = previous.x + previous.width;
+  const crossesColumnGutter = previousRight < pageWidth * 0.52 && item.x > pageWidth * 0.46;
+  const veryLargeGap = gap > pageWidth * 0.2;
+  return crossesColumnGutter || veryLargeGap;
+}
+
+function groupPdfLineSegmentsIntoBlocks(lines, pageWidth = 595.28, pageHeight = 841.89) {
+  if (!Array.isArray(lines) || !lines.length) return [];
+
+  const ordered = lines
+    .filter((line) => line?.bounds && String(line.text || "").trim())
+    .map((line, index) => ({
+      ...line,
+      sourceIndex: index,
+      columnKey: getPdfLineColumnKey(line, pageWidth),
+    }));
+  const columns = new Map();
+
+  ordered.forEach((line) => {
+    const bucket = columns.get(line.columnKey) || [];
+    bucket.push(line);
+    columns.set(line.columnKey, bucket);
+  });
+
+  const blocks = [];
+  columns.forEach((columnLines) => {
+    const sorted = columnLines.sort(comparePdfLinesTopDown);
+    let current = null;
+
+    sorted.forEach((line) => {
+      if (!current || shouldStartNewPdfTextBlock(current, line, pageWidth, pageHeight)) {
+        if (current) blocks.push(finalizePdfTextBlock(current, pageWidth));
+        current = createPdfTextBlock(line);
+        return;
+      }
+
+      mergePdfLineIntoBlock(current, line);
+    });
+
+    if (current) blocks.push(finalizePdfTextBlock(current, pageWidth));
+  });
+
+  return blocks.sort(comparePdfLinesTopDown);
+}
+
+function comparePdfLinesTopDown(a, b) {
+  const ay = Number(a.bounds?.y || 0);
+  const by = Number(b.bounds?.y || 0);
+  if (Math.abs(by - ay) > 2) return by - ay;
+  return Number(a.bounds?.x || 0) - Number(b.bounds?.x || 0);
+}
+
+function getPdfLineColumnKey(line, pageWidth) {
+  const bounds = line?.bounds || {};
+  const x = Number(bounds.x || 0);
+  const width = Number(bounds.width || 0);
+  const center = x + width / 2;
+
+  if (width >= pageWidth * 0.58) return "full";
+  if (x <= pageWidth * 0.16 && width >= pageWidth * 0.46) return "full";
+  if (center < pageWidth * 0.52) return "left";
+  return "right";
+}
+
+function createPdfTextBlock(line) {
+  return {
+    columnKey: line.columnKey,
+    lines: [line],
+    text: String(line.text || "").trim(),
+    fontSizes: [Number(line.fontSize || 10)],
+    bounds: { ...line.bounds },
+    availableWidth: Number(line.availableWidth || line.bounds?.width || 0),
+    availableHeight: Number(line.availableHeight || line.bounds?.height || 0),
+    rowSegmentCount: 1,
+    sourceIndex: line.sourceIndex,
+  };
+}
+
+function shouldStartNewPdfTextBlock(block, line, pageWidth, pageHeight) {
+  if (!block?.lines?.length) return true;
+  if (line.columnKey !== block.columnKey) return true;
+  if (isPdfStandaloneTextLine(line, pageWidth, pageHeight)) return true;
+
+  const previous = block.lines[block.lines.length - 1];
+  if (isPdfStandaloneTextLine(previous, pageWidth, pageHeight)) return true;
+  const previousBounds = previous.bounds || {};
+  const lineBounds = line.bounds || {};
+  const previousFont = Math.max(4, Number(previous.fontSize || previousBounds.height || 10));
+  const lineFont = Math.max(4, Number(line.fontSize || lineBounds.height || 10));
+  const fontDelta = Math.abs(previousFont - lineFont);
+  if (fontDelta > Math.max(1.4, Math.min(previousFont, lineFont) * 0.18)) return true;
+
+  const baselineGap = Number(previousBounds.y || 0) - Number(lineBounds.y || 0);
+  const expectedLineGap = Math.max(previousFont, lineFont) * 1.65;
+  if (baselineGap <= 0 || baselineGap > expectedLineGap) return true;
+
+  const indentDelta = Math.abs(Number(lineBounds.x || 0) - Number(block.lines[0].bounds?.x || 0));
+  const currentLineCount = block.lines.length;
+  if (indentDelta > Math.max(18, lineFont * 2.4) && currentLineCount > 1) return true;
+  if (currentLineCount >= 10) return true;
+
+  const columnWidth = estimatePdfColumnWidth([...block.lines, line], pageWidth);
+  const previousWidth = Number(previousBounds.width || 0);
+  const previousText = String(previous.text || "").trim();
+  const lineText = String(line.text || "").trim();
+  const previousLooksFinal = previousWidth < columnWidth * 0.74 && /[.!?;:。！？；：)]$/.test(previousText);
+  if (previousLooksFinal && !startsWithPdfContinuationText(lineText)) return true;
+
+  if (looksLikePdfSectionHeading(lineText, line, pageWidth)) return true;
+  return false;
+}
+
+function isPdfStandaloneTextLine(line, pageWidth, pageHeight) {
+  const text = String(line?.text || "").replace(/\s+/g, " ").trim();
+  if (!text) return true;
+  if (line?.tableCell) return true;
+
+  const bounds = line?.bounds || {};
+  const y = Number(bounds.y || 0);
+  const fontSize = Number(line?.fontSize || bounds.height || 10);
+  if (fontSize >= 13.5) return true;
+  if (y > pageHeight * 0.94 || y < pageHeight * 0.04) return true;
+  if (/^\d+$/.test(text) && text.length <= 3) return true;
+
+  return looksLikePdfSectionHeading(text, line, pageWidth);
+}
+
+function looksLikePdfSectionHeading(text, line, pageWidth) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  if (normalized.length > 46) return false;
+
+  const bounds = line?.bounds || {};
+  const width = Number(bounds.width || 0);
+  const fontSize = Number(line?.fontSize || bounds.height || 10);
+  const mostlyCaps = /^[A-Z0-9\s,/&().:-]+$/.test(normalized) && /[A-Z]/.test(normalized);
+  const shortLabel = /^[A-Z][A-Z\s,/&-]{2,28}:?$/.test(normalized);
+
+  if ((mostlyCaps || shortLabel) && width < pageWidth * 0.36) return true;
+  if (fontSize >= 11.5 && normalized.length <= 34 && !/[.!?。！？]$/.test(normalized)) return true;
+  return false;
+}
+
+function startsWithPdfContinuationText(text) {
+  return /^(?:and|or|of|in|to|for|with|from|by|on|at|vs\.?|versus|than|that|which|where|when|while|because|as|the|a|an)\b/i.test(text) ||
+    /^[,;:)\]]/.test(text);
+}
+
+function mergePdfLineIntoBlock(block, line) {
+  block.lines.push(line);
+  block.text = joinPdfBlockLineText(block.text, line.text);
+  block.fontSizes.push(Number(line.fontSize || 10));
+  block.bounds = unionPdfBounds(block.bounds, line.bounds);
+  block.availableWidth = Math.max(block.availableWidth, Number(line.availableWidth || line.bounds?.width || 0));
+  block.availableHeight = Math.max(
+    block.availableHeight,
+    Math.max(0, block.bounds.height),
+    block.lines.length * Math.max(...block.fontSizes) * 1.34
+  );
+  block.rowSegmentCount = 1;
+}
+
+function joinPdfBlockLineText(existing, next) {
+  const left = String(existing || "").trim();
+  const right = String(next || "").trim();
+  if (!left) return right;
+  if (!right) return left;
+  if (/-$/.test(left) && /^[A-Za-z]/.test(right)) return `${left.slice(0, -1)}${right}`;
+  return `${left} ${right}`.replace(/\s+/g, " ").trim();
+}
+
+function unionPdfBounds(a, b) {
+  const ax = Number(a?.x || 0);
+  const ay = Number(a?.y || 0);
+  const bx = Number(b?.x || 0);
+  const by = Number(b?.y || 0);
+  const minX = Math.min(ax, bx);
+  const minY = Math.min(ay, by);
+  const maxX = Math.max(ax + Number(a?.width || 0), bx + Number(b?.width || 0));
+  const maxY = Math.max(ay + Number(a?.height || 0), by + Number(b?.height || 0));
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  };
+}
+
+function finalizePdfTextBlock(block, pageWidth) {
+  const lineWidths = block.lines
+    .map((line) => Number(line.bounds?.width || 0))
+    .filter((width) => width > 0)
+    .sort((a, b) => a - b);
+  const fontSizes = block.fontSizes.filter((size) => Number.isFinite(size) && size > 0).sort((a, b) => a - b);
+  const medianFontSize = fontSizes.length ? fontSizes[Math.floor(fontSizes.length / 2)] : 10;
+  const columnWidth = estimatePdfColumnWidth(block.lines, pageWidth);
+  const widthP85 = lineWidths.length ? lineWidths[Math.min(lineWidths.length - 1, Math.floor(lineWidths.length * 0.85))] : block.bounds.width;
+  const targetWidth = Math.max(block.bounds.width, widthP85, columnWidth * 0.82);
+  const rightLimit = block.columnKey === "left" ? pageWidth * 0.51 : pageWidth - 24;
+  const boundedWidth = block.columnKey === "full"
+    ? Math.min(targetWidth, pageWidth - block.bounds.x - 24)
+    : Math.min(targetWidth, rightLimit - block.bounds.x);
+
+  return {
+    text: block.text,
+    fontSize: medianFontSize,
+    availableWidth: Math.max(8, boundedWidth),
+    availableHeight: Math.max(block.availableHeight, block.bounds.height),
+    rowSegmentCount: block.rowSegmentCount,
+    lineCount: block.lines.length,
+    columnKey: block.columnKey,
+    bounds: {
+      ...block.bounds,
+      width: Math.max(block.bounds.width, Math.min(Math.max(8, boundedWidth), pageWidth - block.bounds.x - 18)),
+    },
+  };
+}
+
+function estimatePdfColumnWidth(lines, pageWidth) {
+  const widths = lines
+    .map((line) => Number(line.bounds?.width || 0))
+    .filter((width) => width > 0)
+    .sort((a, b) => a - b);
+  const widest = widths.length ? widths[widths.length - 1] : pageWidth * 0.42;
+  const first = lines[0];
+  const columnKey = first?.columnKey || getPdfLineColumnKey(first, pageWidth);
+
+  if (columnKey === "full") return Math.min(pageWidth - 48, Math.max(widest, Number(first?.availableWidth || 0)));
+  return Math.min(pageWidth * 0.46, Math.max(widest, pageWidth * 0.36));
 }
 
 async function loadWordDocument(loadToken = state.loadToken) {
@@ -3390,6 +3654,9 @@ async function downloadPdfOverlayTranslation() {
     if (page) {
       const plan = createPdfOverlayPlan(segment, font);
       if (plan) {
+        drawPdfRawTextErasesForSegment(page, segment, rgb);
+        const sourceErase = createPdfSourceErasePlan(segment);
+        if (sourceErase) drawPdfOverlayErase(page, sourceErase, rgb);
         drawPdfOverlayErase(page, plan, rgb);
         overlayPlans.push({ page, plan });
       }
@@ -3443,14 +3710,10 @@ function createPdfOverlayPlan(segment, font) {
   const sourceFontSize = Math.max(4, Math.min(28, Number(segment.layout.fontSize || 10)));
   const paddingX = isTableLike ? Math.max(1.2, sourceFontSize * 0.12) : Math.max(2, sourceFontSize * 0.16);
   const paddingY = isTableLike ? Math.max(1, sourceFontSize * 0.1) : Math.max(1.5, sourceFontSize * 0.12);
-  const eraseBaseX = isTableLike ? Math.min(sourceBounds.x, fitBounds.x) : sourceBounds.x;
-  const eraseBaseY = isTableLike ? Math.min(sourceBounds.y, fitBounds.y) : sourceBounds.y;
-  const eraseBaseRight = isTableLike
-    ? Math.max(sourceBounds.x + sourceBounds.width, fitBounds.x + fitBounds.width)
-    : sourceBounds.x + sourceBounds.width;
-  const eraseBaseTop = isTableLike
-    ? Math.max(sourceBounds.y + sourceBounds.height, fitBounds.y + fitBounds.height)
-    : sourceBounds.y + sourceBounds.height;
+  const eraseBaseX = Math.min(sourceBounds.x, fitBounds.x);
+  const eraseBaseY = Math.min(sourceBounds.y, fitBounds.y);
+  const eraseBaseRight = Math.max(sourceBounds.x + sourceBounds.width, fitBounds.x + fitBounds.width);
+  const eraseBaseTop = Math.max(sourceBounds.y + sourceBounds.height, fitBounds.y + fitBounds.height);
   const eraseWidth = Math.max(2, eraseBaseRight - eraseBaseX + paddingX * 2);
   const eraseHeight = Math.max(
     eraseBaseTop - eraseBaseY + paddingY * 2,
@@ -3492,6 +3755,154 @@ function createPdfOverlayPlan(segment, font) {
   };
 }
 
+function createPdfSourceErasePlan(segment) {
+  const sourceBounds = segment.layout?.bounds;
+  if (!sourceBounds) return null;
+
+  const cell = segment.layout?.tableCell;
+  const sourceFontSize = Math.max(4, Math.min(28, Number(segment.layout?.fontSize || 10)));
+  const lineCount = Number(segment.layout?.lineCount || 1);
+  const pageSize = state.pdfPageSizes.get(segment.path) || {};
+  const pageWidth = Number(pageSize.width || 595.28);
+  const coverColor = segment.layout?.backgroundColor || { r: 1, g: 1, b: 1 };
+  const paddingX = cell ? Math.max(1.2, sourceFontSize * 0.12) : Math.max(2, sourceFontSize * 0.2);
+  const paddingY = cell ? Math.max(1, sourceFontSize * 0.1) : Math.max(1.5, sourceFontSize * 0.18);
+
+  if (cell) {
+    return {
+      erase: {
+        x: Math.max(0, cell.x - paddingX),
+        y: Math.max(0, cell.y - paddingY),
+        width: Math.max(2, cell.width + paddingX * 2),
+        height: Math.max(2, cell.height + paddingY * 2),
+        color: coverColor,
+      },
+    };
+  }
+
+  const availableWidth = Number(segment.layout?.availableWidth || 0);
+  const availableHeight = Number(segment.layout?.availableHeight || 0);
+  const eraseWidthBase = lineCount > 1
+    ? Math.max(Number(sourceBounds.width || 0), availableWidth)
+    : Number(sourceBounds.width || 0);
+  const eraseHeightBase = lineCount > 1
+    ? Math.max(Number(sourceBounds.height || 0), availableHeight)
+    : Number(sourceBounds.height || 0);
+  const columnKey = segment.layout?.columnKey || "";
+  let eraseBaseX = Number(sourceBounds.x || 0);
+  if (lineCount > 1 && columnKey === "left") eraseBaseX = Math.min(eraseBaseX, pageWidth * 0.055);
+  if (lineCount > 1 && columnKey === "right") eraseBaseX = Math.min(eraseBaseX, pageWidth * 0.495);
+  let eraseX = Math.max(0, eraseBaseX - paddingX);
+  const columnRight = lineCount > 1 && columnKey === "left"
+    ? pageWidth * 0.49
+    : (lineCount > 1 && columnKey === "right" ? pageWidth * 0.955 : pageWidth - 4);
+  const maxWidth = Math.max(2, columnRight - eraseX);
+  let eraseY = Math.max(0, Number(sourceBounds.y || 0) - paddingY);
+  let eraseWidth = lineCount > 1 && (columnKey === "left" || columnKey === "right")
+    ? maxWidth
+    : Math.max(2, Math.min(maxWidth, eraseWidthBase + paddingX * 2));
+  let eraseHeight = Math.max(2, eraseHeightBase + paddingY * (lineCount > 1 ? 4.8 : 2));
+
+  const fragmentUnion = getPdfEraseFragmentUnionForSegment(segment, {
+    x: eraseX,
+    y: eraseY,
+    width: eraseWidth,
+    height: eraseHeight,
+  }, pageWidth, sourceFontSize);
+  if (fragmentUnion) {
+    const leftSafety = lineCount > 1 ? Math.max(paddingX * 2.6, sourceFontSize * 0.55) : paddingX;
+    const bottomSafety = lineCount > 1 ? Math.max(paddingY * 4.8, sourceFontSize * 1.05) : paddingY;
+    const topSafety = lineCount > 1 ? Math.max(paddingY * 2.2, sourceFontSize * 0.44) : paddingY;
+    const rightSafety = lineCount > 1 ? Math.max(paddingX * 1.6, sourceFontSize * 0.32) : paddingX;
+    const right = Math.max(eraseX + eraseWidth, fragmentUnion.x + fragmentUnion.width + rightSafety);
+    const top = Math.max(eraseY + eraseHeight, fragmentUnion.y + fragmentUnion.height + topSafety);
+    eraseX = Math.max(0, Math.min(eraseX, fragmentUnion.x - leftSafety));
+    eraseY = Math.max(0, Math.min(eraseY, fragmentUnion.y - bottomSafety));
+    eraseWidth = Math.max(2, Math.min(pageWidth - eraseX - 4, right - eraseX));
+    eraseHeight = Math.max(2, top - eraseY);
+  }
+
+  return {
+    erase: {
+      x: eraseX,
+      y: eraseY,
+      width: eraseWidth,
+      height: eraseHeight,
+      color: coverColor,
+    },
+  };
+}
+
+function getPdfEraseFragmentUnionForSegment(segment, area, pageWidth, sourceFontSize) {
+  const fragments = state.pdfEraseFragments.get(segment.path) || [];
+  if (!fragments.length || !area) return null;
+
+  const lineCount = Number(segment.layout?.lineCount || 1);
+  const columnKey = segment.layout?.columnKey || "";
+  const verticalSlack = Math.max(sourceFontSize * (lineCount > 1 ? 2.2 : 0.7), 6);
+  const horizontalSlack = Math.max(sourceFontSize * (lineCount > 1 ? 3.2 : 1), 6);
+  const searchArea = {
+    x: Math.max(0, Number(area.x || 0) - horizontalSlack),
+    y: Math.max(0, Number(area.y || 0) - verticalSlack),
+    width: Number(area.width || 0) + horizontalSlack * 2,
+    height: Number(area.height || 0) + verticalSlack * 2,
+  };
+  const matches = fragments.filter((fragment) => {
+    const bounds = fragment.bounds;
+    if (!bounds) return false;
+    const cx = Number(bounds.x || 0) + Number(bounds.width || 0) / 2;
+    const cy = Number(bounds.y || 0) + Number(bounds.height || 0) / 2;
+    if (!pointInRect(cx, cy, searchArea) && !rectsIntersect(bounds, searchArea)) return false;
+    if (columnKey === "left" && cx > pageWidth * 0.54) return false;
+    if (columnKey === "right" && cx < pageWidth * 0.44) return false;
+    return true;
+  });
+  if (!matches.length) return null;
+
+  return matches.reduce((bounds, fragment) => bounds ? unionPdfBounds(bounds, fragment.bounds) : { ...fragment.bounds }, null);
+}
+
+function drawPdfRawTextErasesForSegment(page, segment, rgb) {
+  const fragments = state.pdfEraseFragments.get(segment.path) || [];
+  if (!fragments.length) return;
+
+  const sourceErase = createPdfSourceErasePlan(segment);
+  const area = sourceErase?.erase;
+  if (!area) return;
+
+  const coverColor = segment.layout?.backgroundColor || { r: 1, g: 1, b: 1 };
+  const fontSize = Math.max(4, Math.min(28, Number(segment.layout?.fontSize || 10)));
+  const padX = Math.max(1, fontSize * 0.16);
+  const padY = Math.max(0.8, fontSize * 0.12);
+
+  fragments.forEach((fragment) => {
+    const bounds = fragment.bounds;
+    if (!bounds || !rectsIntersect(area, bounds)) return;
+    page.drawRectangle({
+      x: Math.max(0, bounds.x - padX),
+      y: Math.max(0, bounds.y - padY),
+      width: Math.max(1, bounds.width + padX * 2),
+      height: Math.max(1, bounds.height + padY * 2),
+      color: rgb(coverColor.r, coverColor.g, coverColor.b),
+      opacity: 1,
+    });
+  });
+}
+
+function rectsIntersect(a, b) {
+  return Number(a.x || 0) < Number(b.x || 0) + Number(b.width || 0) &&
+    Number(a.x || 0) + Number(a.width || 0) > Number(b.x || 0) &&
+    Number(a.y || 0) < Number(b.y || 0) + Number(b.height || 0) &&
+    Number(a.y || 0) + Number(a.height || 0) > Number(b.y || 0);
+}
+
+function pointInRect(x, y, rect) {
+  return x >= Number(rect.x || 0) &&
+    x <= Number(rect.x || 0) + Number(rect.width || 0) &&
+    y >= Number(rect.y || 0) &&
+    y <= Number(rect.y || 0) + Number(rect.height || 0);
+}
+
 function getPdfOverlayFitBounds(segment, font, text, sourceBounds) {
   const layout = segment.layout || {};
   const sourceWidth = Math.max(4, Number(sourceBounds.width || 0));
@@ -3499,12 +3910,17 @@ function getPdfOverlayFitBounds(segment, font, text, sourceBounds) {
   const sourceFontSize = Math.max(4, Math.min(28, Number(layout.fontSize || 10)));
   const textWidth = Math.max(0, font.widthOfTextAtSize(String(text || ""), sourceFontSize));
   const rowSegments = Number(layout.rowSegmentCount || 1);
+  const lineCount = Number(layout.lineCount || 1);
   const compactRow = rowSegments > 1 || sourceWidth < 110 || sourceFontSize <= 8.5;
   const widthMultiplier = compactRow ? 1.14 : 1.38;
   const widthPad = Math.max(8, sourceFontSize * (compactRow ? 0.8 : 1.4));
-  const targetWidth = Math.max(sourceWidth, Math.min(textWidth * 1.04, sourceWidth * widthMultiplier + widthPad));
+  const rawTargetWidth = Math.max(sourceWidth, Math.min(textWidth * 1.04, sourceWidth * widthMultiplier + widthPad));
+  const availableWidth = Number(layout.availableWidth || 0);
+  const widthCap = availableWidth > sourceWidth ? availableWidth : sourceWidth;
+  const targetWidth = lineCount > 1 ? Math.min(rawTargetWidth, widthCap) : rawTargetWidth;
   const availableHeight = Number(layout.availableHeight || 0);
-  const targetHeight = Math.max(sourceHeight, Math.min(Math.max(sourceHeight, availableHeight), sourceHeight * 1.55));
+  const heightMultiplier = lineCount > 1 ? 1.16 : 1.55;
+  const targetHeight = Math.max(sourceHeight, Math.min(Math.max(sourceHeight, availableHeight), sourceHeight * heightMultiplier));
 
   return {
     ...sourceBounds,
@@ -4708,6 +5124,7 @@ async function resetApp(clearInput = true, options = {}) {
   state.slideVisuals = new Map();
   state.pdfPageSizes = new Map();
   state.pdfTableCells = new Map();
+  state.pdfEraseFragments = new Map();
   state.pdfBytes = null;
   state.pdfParseSource = "";
   state.pdfParsedMarkdown = "";
