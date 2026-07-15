@@ -118,7 +118,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v129";
+const APP_VERSION = "v130";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -6194,18 +6194,34 @@ function renderPdfLayoutFurnitureBoxes(overlay, pagePath) {
       scheduleCurrentDraftSave();
     });
 
+    const applyAll = document.createElement("button");
+    applyAll.type = "button";
+    applyAll.textContent = "应用全部";
+    applyAll.title = "将当前页眉/页脚范围应用到全部页面";
+    applyAll.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      applyPdfManualFurnitureRegionToAllPages(pagePath, region.kind, box, overlay);
+      rerenderPreviewIfOpen();
+      scheduleCurrentDraftSave();
+    });
+
     const handle = document.createElement("i");
     handle.className = "pdf-layout-resize-handle";
     handle.setAttribute("aria-hidden", "true");
     attachPdfLayoutFurnitureMove(box, pagePath, region.kind, overlay);
     attachPdfLayoutFurnitureResize(handle, box, pagePath, region.kind, overlay);
-    box.append(label, reset, handle);
+    box.append(label, applyAll, reset, handle);
     overlay.append(box);
   });
 }
 
 function upsertPdfManualFurnitureRegion(pagePath, kind, box, overlay) {
   const bounds = getPdfBoundsFromLayoutBox(box, overlay);
+  upsertPdfManualFurnitureBounds(pagePath, kind, bounds);
+}
+
+function upsertPdfManualFurnitureBounds(pagePath, kind, bounds) {
   const regions = getPdfManualRegions(pagePath).filter((region) => region.kind !== kind);
   regions.push({
     id: `${kind}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -6213,6 +6229,38 @@ function upsertPdfManualFurnitureRegion(pagePath, kind, box, overlay) {
     ...bounds,
   });
   state.pdfManualPreservedRegions.set(pagePath, regions);
+}
+
+function applyPdfManualFurnitureRegionToAllPages(sourcePagePath, kind, box, overlay) {
+  const sourceBounds = getPdfBoundsFromLayoutBox(box, overlay);
+  const sourceWidth = Number(overlay.dataset.pageWidth || 1);
+  const sourceHeight = Number(overlay.dataset.pageHeight || 1);
+  getPdfAllPagePaths().forEach((pagePath) => {
+    const pageSize = state.pdfPageSizes.get(pagePath) || state.pdfPageSizes.get(sourcePagePath) || {};
+    const pageWidth = Number(pageSize.width || sourceWidth || 595.28);
+    const pageHeight = Number(pageSize.height || sourceHeight || 841.89);
+    upsertPdfManualFurnitureBounds(pagePath, kind, scalePdfBoundsToPage(sourceBounds, sourceWidth, sourceHeight, pageWidth, pageHeight));
+  });
+}
+
+function getPdfAllPagePaths() {
+  const count = Number(state.slideCount || 0);
+  if (count > 0) {
+    return Array.from({ length: count }, (_, index) => `pdf/page-${index + 1}`);
+  }
+  return [...state.pdfPageSizes.keys()]
+    .filter((pagePath) => /^pdf\/page-\d+$/.test(pagePath))
+    .sort((a, b) => getPdfPageNumberFromPath(a) - getPdfPageNumberFromPath(b));
+}
+
+function scalePdfBoundsToPage(bounds, sourceWidth, sourceHeight, pageWidth, pageHeight) {
+  const widthRatio = pageWidth / Math.max(1, Number(sourceWidth || pageWidth || 1));
+  const heightRatio = pageHeight / Math.max(1, Number(sourceHeight || pageHeight || 1));
+  const x = clampNumber(Number(bounds.x || 0) * widthRatio, 0, pageWidth);
+  const width = clampNumber(Number(bounds.width || 0) * widthRatio, 1, pageWidth - x);
+  const y = clampNumber(Number(bounds.y || 0) * heightRatio, 0, pageHeight);
+  const height = clampNumber(Number(bounds.height || 0) * heightRatio, 1, pageHeight - y);
+  return { x, y, width, height };
 }
 
 function removePdfManualFurnitureRegion(pagePath, kind) {

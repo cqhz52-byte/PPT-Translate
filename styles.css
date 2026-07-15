@@ -1172,6 +1172,7 @@ td:first-child {
 .help-head,
 .summary-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
@@ -1763,7 +1764,7 @@ td:first-child {
 
 .pdf-layout-furniture-box button {
   min-height: 22px;
-  padding: 0 6px;
+  padding: 0 5px;
   border: 0;
 }
 
