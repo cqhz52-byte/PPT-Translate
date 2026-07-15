@@ -13,7 +13,7 @@ const state = {
   pdfManualPreservedRegions: new Map(),
   pdfManualRegionSelectionEnabled: false,
   pdfLayoutShowSourceBackground: false,
-  pdfLayoutShowParsedMap: true,
+  pdfLayoutShowParsedMap: false,
   pdfBytes: null,
   pdfParseSource: "",
   pdfParsedMarkdown: "",
@@ -118,7 +118,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v126";
+const APP_VERSION = "v127";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -1654,6 +1654,19 @@ function getPdfRegionTargetBounds(region) {
     };
   }
   return getPdfRegionSourceBounds(region);
+}
+
+function getPdfSegmentTargetBounds(segment) {
+  const bounds = segment?.overrides?.pdfBounds;
+  if (bounds && ["x", "y", "width", "height"].every((key) => Number.isFinite(Number(bounds[key])))) {
+    return {
+      x: Number(bounds.x),
+      y: Number(bounds.y),
+      width: Math.max(1, Number(bounds.width)),
+      height: Math.max(1, Number(bounds.height)),
+    };
+  }
+  return segment?.layout?.bounds || { x: 0, y: 0, width: 1, height: 1 };
 }
 
 async function renderPdfPageCropToPng(sourcePage, bounds, pageWidth, pageHeight, options = {}) {
@@ -4899,6 +4912,7 @@ async function downloadPdfOverlayTranslation() {
 
 function createPdfOverlayPlan(segment, font) {
   const sourceBounds = segment.layout.bounds;
+  const targetBounds = getPdfSegmentTargetBounds(segment);
   const cell = segment.layout.tableCell;
   const direction = getDirectionConfig(els.translationDirection?.value || "");
   if (shouldSkipSegmentForDirection(segment, direction)) return null;
@@ -4906,10 +4920,15 @@ function createPdfOverlayPlan(segment, font) {
   const text = getPdfExportText(segment);
   if (!text) return null;
 
-  const fitBounds = cell
-    ? { x: cell.x + 2, y: cell.y + 2, width: Math.max(4, cell.width - 4), height: Math.max(4, cell.height - 4) }
-    : getPdfOverlayFitBounds(segment, font, text, sourceBounds);
-  const isTableLike = Boolean(cell);
+  let fitBounds;
+  if (segment.overrides?.pdfBounds) {
+    fitBounds = targetBounds;
+  } else if (cell) {
+    fitBounds = { x: cell.x + 2, y: cell.y + 2, width: Math.max(4, cell.width - 4), height: Math.max(4, cell.height - 4) };
+  } else {
+    fitBounds = getPdfOverlayFitBounds(segment, font, text, targetBounds);
+  }
+  const isTableLike = Boolean(cell) && !segment.overrides?.pdfBounds;
   const sourceFontSize = Math.max(4, Math.min(28, Number(segment.layout.fontSize || 10)));
   const paddingX = isTableLike ? Math.max(1.2, sourceFontSize * 0.12) : Math.max(2, sourceFontSize * 0.16);
   const paddingY = isTableLike ? Math.max(1, sourceFontSize * 0.1) : Math.max(1.5, sourceFontSize * 0.12);
@@ -4935,7 +4954,7 @@ function createPdfOverlayPlan(segment, font) {
   const lines = fit.lines;
   const lineHeight = fit.lineHeight;
   const textHeight = getPdfTextBlockHeight(lines, fontSize, lineHeight);
-  const fitY = isTableLike ? Math.max(0, sourceBounds.y - Math.max(0, (fitBounds.height - sourceBounds.height) / 2)) : sourceBounds.y;
+  const fitY = isTableLike ? Math.max(0, targetBounds.y - Math.max(0, (fitBounds.height - targetBounds.height) / 2)) : targetBounds.y;
   const baselineOffset = getPdfBaselineOffset(fontSize);
   const isTitleLike = isPdfTitleSegment(segment);
   let y = isTitleLike
@@ -5927,8 +5946,45 @@ function renderPdfLayoutTextBoxes(overlay, pagePath) {
       const box = document.createElement("div");
       box.className = `pdf-layout-text-box ${info.exportable ? "exportable" : "skipped"}`;
       box.title = info.reason;
-      positionPdfLayoutBox(box, bounds, pageWidth, pageHeight, cssWidth, cssHeight);
-      box.textContent = info.text;
+      positionPdfLayoutBox(box, info.exportable ? getPdfSegmentTargetBounds(segment) : bounds, pageWidth, pageHeight, cssWidth, cssHeight);
+      const content = document.createElement("div");
+      content.className = "pdf-layout-text-content";
+      content.textContent = info.text;
+      if (info.exportable) {
+        content.contentEditable = "true";
+        content.spellcheck = false;
+        content.title = "可直接编辑译文";
+        content.addEventListener("blur", () => {
+          segment.translation = content.textContent.trim();
+          scheduleCurrentDraftSave();
+          renderSegments();
+        });
+        const moveHandle = document.createElement("button");
+        moveHandle.type = "button";
+        moveHandle.className = "pdf-layout-text-move";
+        moveHandle.textContent = "移动";
+        moveHandle.title = "拖动移动此段译文";
+        attachPdfLayoutTextMove(moveHandle, box, segment, overlay);
+        const handle = document.createElement("i");
+        handle.className = "pdf-layout-text-resize-handle";
+        handle.setAttribute("aria-hidden", "true");
+        attachPdfLayoutTextResize(handle, box, segment, overlay);
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.className = "pdf-layout-text-reset";
+        reset.textContent = "重置";
+        reset.title = "恢复此段译文位置和大小";
+        reset.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          delete segment.overrides.pdfBounds;
+          rerenderPreviewIfOpen();
+          scheduleCurrentDraftSave();
+        });
+        box.append(content, moveHandle, reset, handle);
+      } else {
+        box.append(content);
+      }
       overlay.append(box);
     });
 }
@@ -6031,6 +6087,86 @@ function updatePdfManualRegionTargetFromBox(region, box, overlay) {
   const y = clampNumber(bottomPdf, 0, pageHeight);
   const targetHeight = clampNumber(topPdf - bottomPdf, 1, pageHeight - y);
   region.targetBounds = { x, y, width: targetWidth, height: targetHeight };
+}
+
+function updatePdfSegmentBoundsFromBox(segment, box, overlay) {
+  const pageWidth = Number(overlay.dataset.pageWidth || 1);
+  const pageHeight = Number(overlay.dataset.pageHeight || 1);
+  const cssWidth = Number(overlay.dataset.cssWidth || overlay.getBoundingClientRect().width || 1);
+  const cssHeight = Number(overlay.dataset.cssHeight || overlay.getBoundingClientRect().height || 1);
+  const left = Math.max(0, box.offsetLeft);
+  const top = Math.max(0, box.offsetTop);
+  const width = Math.max(8, box.offsetWidth);
+  const height = Math.max(8, box.offsetHeight);
+  const x = clampNumber((left / cssWidth) * pageWidth, 0, pageWidth);
+  const targetWidth = clampNumber((width / cssWidth) * pageWidth, 1, pageWidth - x);
+  const topPdf = pageHeight - (top / cssHeight) * pageHeight;
+  const bottomPdf = pageHeight - ((top + height) / cssHeight) * pageHeight;
+  const y = clampNumber(bottomPdf, 0, pageHeight);
+  const targetHeight = clampNumber(topPdf - bottomPdf, 1, pageHeight - y);
+  segment.overrides.pdfBounds = { x, y, width: targetWidth, height: targetHeight };
+}
+
+function attachPdfLayoutTextMove(handle, box, segment, overlay) {
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    handle.setPointerCapture?.(event.pointerId);
+    const start = {
+      x: event.clientX,
+      y: event.clientY,
+      left: box.offsetLeft,
+      top: box.offsetTop,
+    };
+    const move = (moveEvent) => {
+      const maxLeft = overlay.clientWidth - box.offsetWidth;
+      const maxTop = overlay.clientHeight - box.offsetHeight;
+      box.style.left = `${clampNumber(start.left + moveEvent.clientX - start.x, 0, Math.max(0, maxLeft))}px`;
+      box.style.top = `${clampNumber(start.top + moveEvent.clientY - start.y, 0, Math.max(0, maxTop))}px`;
+    };
+    const done = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", done);
+      handle.removeEventListener("pointercancel", done);
+      updatePdfSegmentBoundsFromBox(segment, box, overlay);
+      scheduleCurrentDraftSave();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", done);
+    handle.addEventListener("pointercancel", done);
+  });
+}
+
+function attachPdfLayoutTextResize(handle, box, segment, overlay) {
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    handle.setPointerCapture?.(event.pointerId);
+    const start = {
+      x: event.clientX,
+      y: event.clientY,
+      width: box.offsetWidth,
+      height: box.offsetHeight,
+    };
+    const move = (moveEvent) => {
+      const maxWidth = overlay.clientWidth - box.offsetLeft;
+      const maxHeight = overlay.clientHeight - box.offsetTop;
+      const width = clampNumber(start.width + moveEvent.clientX - start.x, 24, Math.max(24, maxWidth));
+      const height = clampNumber(start.height + moveEvent.clientY - start.y, 18, Math.max(18, maxHeight));
+      box.style.width = `${width}px`;
+      box.style.height = `${height}px`;
+    };
+    const done = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", done);
+      handle.removeEventListener("pointercancel", done);
+      updatePdfSegmentBoundsFromBox(segment, box, overlay);
+      scheduleCurrentDraftSave();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", done);
+    handle.addEventListener("pointercancel", done);
+  });
 }
 
 function attachPdfLayoutImageMove(box, region, overlay) {
@@ -7082,6 +7218,15 @@ function sanitizeSegmentOverrides(overrides = {}) {
     };
   }
 
+  if (overrides.pdfBounds && ["x", "y", "width", "height"].every((key) => Number.isFinite(Number(overrides.pdfBounds[key])))) {
+    clean.pdfBounds = {
+      x: Number(overrides.pdfBounds.x),
+      y: Number(overrides.pdfBounds.y),
+      width: Number(overrides.pdfBounds.width),
+      height: Number(overrides.pdfBounds.height),
+    };
+  }
+
   return clean;
 }
 
@@ -7963,6 +8108,7 @@ function createSegmentControls(segment, index) {
         singleLine: current.type === "pptx" ? current.overrides.singleLine : false,
         wrapMode: current.type === "pptx" ? current.overrides.wrapMode : "",
         bounds: null,
+        pdfBounds: item.overrides?.pdfBounds || null,
       };
     });
     renderSegments();
@@ -7985,6 +8131,7 @@ function createSegmentOverrides() {
     singleLine: false,
     wrapMode: "",
     bounds: null,
+    pdfBounds: null,
   };
 }
 
