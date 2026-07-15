@@ -12,6 +12,8 @@ const state = {
   pdfPreservedRegions: new Map(),
   pdfManualPreservedRegions: new Map(),
   pdfManualRegionSelectionEnabled: false,
+  pdfLayoutShowSourceBackground: false,
+  pdfLayoutShowParsedMap: false,
   pdfBytes: null,
   pdfParseSource: "",
   pdfParsedMarkdown: "",
@@ -116,7 +118,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v124";
+const APP_VERSION = "v125";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -5806,8 +5808,9 @@ function renderPdfLayoutPreview() {
   if (els.previewTitle) {
     els.previewTitle.textContent = "PDF 译文排版预览/调整";
   }
+  const stats = getPdfLayoutPreviewStats();
   if (els.previewMeta) {
-    els.previewMeta.textContent = `PDF · ${state.segments.length} 段文字 · ${getPdfManualPreservedRegionCount()} 个手动图片区域`;
+    els.previewMeta.textContent = `PDF · 已解析 ${stats.parsed} 段 · 将回写 ${stats.exportable} 段 · 跳过 ${stats.skipped} 段 · ${getPdfManualPreservedRegionCount()} 个手动图片区域`;
   }
 
   const panel = document.createElement("section");
@@ -5815,8 +5818,27 @@ function renderPdfLayoutPreview() {
   const title = document.createElement("h3");
   title.textContent = "局部调整";
   const detail = document.createElement("p");
-  detail.textContent = "手动框选的图片/图题区域可在这里移动或缩放；导出时会从原位置裁剪图片，并按这里的位置放入译文 PDF。";
-  panel.append(title, detail);
+  detail.textContent = "默认只显示系统会回写的译文层和手动图片框。原文底图仅用于对齐参考，不参与导出。";
+  const actions = document.createElement("div");
+  actions.className = "pdf-layout-tool-actions";
+  const sourceToggle = document.createElement("button");
+  sourceToggle.type = "button";
+  sourceToggle.textContent = state.pdfLayoutShowSourceBackground ? "隐藏原文底图" : "显示原文底图";
+  sourceToggle.classList.toggle("active", state.pdfLayoutShowSourceBackground);
+  sourceToggle.addEventListener("click", () => {
+    state.pdfLayoutShowSourceBackground = !state.pdfLayoutShowSourceBackground;
+    rerenderPreviewIfOpen();
+  });
+  const parsedToggle = document.createElement("button");
+  parsedToggle.type = "button";
+  parsedToggle.textContent = state.pdfLayoutShowParsedMap ? "隐藏解析范围" : "显示解析范围";
+  parsedToggle.classList.toggle("active", state.pdfLayoutShowParsedMap);
+  parsedToggle.addEventListener("click", () => {
+    state.pdfLayoutShowParsedMap = !state.pdfLayoutShowParsedMap;
+    rerenderPreviewIfOpen();
+  });
+  actions.append(sourceToggle, parsedToggle);
+  panel.append(title, detail, actions);
   els.previewBody.append(panel);
 
   const pages = document.createElement("div");
@@ -5852,6 +5874,7 @@ async function renderPdfLayoutPreviewPages(container) {
 
     const frame = document.createElement("div");
     frame.className = "pdf-layout-page-frame";
+    frame.classList.toggle("source-visible", state.pdfLayoutShowSourceBackground);
     frame.style.width = `${metrics.cssWidth}px`;
     frame.style.height = `${metrics.cssHeight}px`;
 
@@ -5897,15 +5920,51 @@ function renderPdfLayoutTextBoxes(overlay, pagePath) {
   state.segments
     .filter((segment) => segment.type === "pdf" && segment.path === pagePath && segment.layout?.bounds)
     .forEach((segment) => {
-      const text = getPdfExportText(segment);
-      if (!text) return;
+      const info = getPdfLayoutPreviewTextInfo(segment);
+      if (!info.text) return;
+      if (!info.exportable && !state.pdfLayoutShowParsedMap) return;
       const bounds = segment.layout.bounds;
       const box = document.createElement("div");
-      box.className = "pdf-layout-text-box";
+      box.className = `pdf-layout-text-box ${info.exportable ? "exportable" : "skipped"}`;
+      box.title = info.reason;
       positionPdfLayoutBox(box, bounds, pageWidth, pageHeight, cssWidth, cssHeight);
-      box.textContent = text;
+      box.textContent = info.text;
       overlay.append(box);
     });
+}
+
+function getPdfLayoutPreviewTextInfo(segment) {
+  const exportText = getPdfExportText(segment);
+  if (exportText) {
+    return {
+      exportable: true,
+      text: exportText,
+      reason: "将回写到译文 PDF",
+    };
+  }
+
+  const sourceText = sanitizePdfExportText(segment.original || "");
+  if (!sourceText) return { exportable: false, text: "", reason: "空文本" };
+  if (isInsidePdfPreservedRegion(segment)) {
+    return { exportable: false, text: sourceText, reason: "已解析，但位于图片/图题/参考文献保留区域，导出时原样保留" };
+  }
+  if (shouldKeepPdfSourceText(segment)) {
+    return { exportable: false, text: sourceText, reason: "已解析，但属于页眉页脚、参考文献或出版信息，导出时不重写" };
+  }
+  if (!String(segment.translation || "").trim()) {
+    return { exportable: false, text: sourceText, reason: "已解析，但还没有译文" };
+  }
+  return { exportable: false, text: sourceText, reason: "已解析，但当前译文未通过目标语言校验，导出时跳过" };
+}
+
+function getPdfLayoutPreviewStats() {
+  const pdfSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.layout?.bounds);
+  const exportable = pdfSegments.filter((segment) => Boolean(getPdfExportText(segment))).length;
+  return {
+    parsed: pdfSegments.length,
+    exportable,
+    skipped: Math.max(0, pdfSegments.length - exportable),
+  };
 }
 
 function renderPdfLayoutImageBoxes(overlay, pagePath) {

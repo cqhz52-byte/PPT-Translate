@@ -1487,6 +1487,7 @@ td:first-child {
 
 .pdf-layout-tool {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px;
   width: min(100%, 880px);
   justify-self: center;
@@ -1510,6 +1511,24 @@ td:first-child {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.pdf-layout-tool-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.pdf-layout-tool-actions button {
+  min-height: 34px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.pdf-layout-tool-actions button.active {
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+  color: #fff;
 }
 
 .pdf-layout-pages {
@@ -1554,8 +1573,12 @@ td:first-child {
   width: 100%;
   max-width: 100%;
   height: auto;
-  opacity: 0.16;
+  opacity: 0;
   filter: grayscale(1);
+}
+
+.pdf-layout-page-frame.source-visible canvas {
+  opacity: 0.16;
 }
 
 .pdf-layout-overlay {
@@ -1576,6 +1599,19 @@ td:first-child {
   background: rgba(255, 255, 255, 0.62);
   overflow-wrap: anywhere;
   pointer-events: none;
+}
+
+.pdf-layout-text-box.exportable {
+  border-color: rgba(22, 90, 114, 0.42);
+  background: rgba(255, 255, 255, 0.72);
+  color: #172321;
+}
+
+.pdf-layout-text-box.skipped {
+  border-color: rgba(96, 112, 108, 0.24);
+  background: rgba(210, 218, 215, 0.18);
+  color: rgba(96, 112, 108, 0.64);
+  font-weight: 600;
 }
 
 .pdf-layout-image-box {
@@ -2238,7 +2274,13 @@ td:first-child {
   }
 
   .pdf-layout-tool {
+    grid-template-columns: minmax(0, 1fr);
     padding: 10px;
+  }
+
+  .pdf-layout-tool-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
 
   .pdf-layout-page {
