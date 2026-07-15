@@ -1,4 +1,4 @@
-const CACHE_NAME = "ppt-translator-pwa-v127";
+const CACHE_NAME = "ppt-translator-pwa-v128";
 const CORE_ASSETS = [
   "./",
   "./index.html",

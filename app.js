@@ -118,7 +118,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v127";
+const APP_VERSION = "v128";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -1582,8 +1582,7 @@ function expandPdfImageFallbackBounds(bounds, pageWidth, pageHeight) {
 async function drawPdfPreservedPageFurniture(sourcePage, targetPage, pdfDoc, pageSize, options = {}) {
   const pageWidth = Number(pageSize.width || 595.28);
   const pageHeight = Number(pageSize.height || 841.89);
-  const topHeight = Math.min(58, Math.max(42, pageHeight * 0.065));
-  const bottomHeight = Math.min(46, Math.max(34, pageHeight * 0.052));
+  const { topHeight, bottomHeight } = getPdfPageFurnitureMetrics(pageHeight);
   const regions = [
     { x: 0, y: pageHeight - topHeight, width: pageWidth, height: topHeight },
     { x: 0, y: 0, width: pageWidth, height: bottomHeight },
@@ -1600,6 +1599,14 @@ async function drawPdfPreservedPageFurniture(sourcePage, targetPage, pdfDoc, pag
       height: region.height,
     });
   }
+}
+
+function getPdfPageFurnitureMetrics(pageHeight) {
+  const height = Number(pageHeight || 841.89);
+  return {
+    topHeight: Math.min(72, Math.max(52, height * 0.085)),
+    bottomHeight: Math.min(58, Math.max(42, height * 0.064)),
+  };
 }
 
 async function drawPdfPreservedRegions(sourcePage, targetPage, pdfDoc, pagePath, pageSize, options = {}) {
@@ -4886,6 +4893,7 @@ async function downloadPdfOverlayTranslation() {
   }
 
   resolvePdfOverlayPlanCollisions(overlayPlans);
+  overlayPlans.forEach(({ page, plan }) => drawPdfOverlayErase(page, plan, rgb));
   overlayPlans.forEach(({ page, plan }) => drawPdfOverlayText(page, plan, font, rgb));
 
   setProgress(0.9);
@@ -6374,17 +6382,14 @@ function shouldRedrawKeptPdfSourceText(segment) {
     return false;
   }
   if (segment?.layout?.isReferenceText) return false;
-  return isLikelyPdfSidebarMetadata(segment) ||
-    isLikelyPdfAuthorByline(segment);
+  return false;
 }
 
 function shouldKeepPdfSourceText(segment) {
   return Boolean(segment?.layout?.isReferenceText) ||
     isLikelyPdfArtifactText(segment) ||
     isLikelyPdfHeaderFooterText(segment) ||
-    isLikelyPdfPublicationFurniture(segment) ||
-    isLikelyPdfSidebarMetadata(segment) ||
-    isLikelyPdfAuthorByline(segment);
+    isLikelyPdfPublicationFurniture(segment);
 }
 
 function sanitizePdfExportText(text) {
@@ -6424,9 +6429,12 @@ function isLikelyPdfHeaderFooterText(segment) {
   if (!bounds || !pageHeight) return false;
 
   const y = Number(bounds.y || 0);
+  const height = Number(bounds.height || 0);
+  const centerY = y + height / 2;
   const fontSize = Number(segment.layout?.fontSize || 10);
-  const inHeader = y > pageHeight * 0.925;
-  const inFooter = y < pageHeight * 0.075;
+  const { topHeight, bottomHeight } = getPdfPageFurnitureMetrics(pageHeight);
+  const inHeader = centerY > pageHeight - topHeight;
+  const inFooter = centerY < bottomHeight;
   if (!inHeader && !inFooter) return false;
 
   const looksLikePageFurniture = /^[\d\s\-–—]+$/.test(text) ||
