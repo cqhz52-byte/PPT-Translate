@@ -120,7 +120,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v132";
+const APP_VERSION = "v133";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -5823,11 +5823,42 @@ function createOriginalPreviewItem(segment) {
   return item;
 }
 
-function createOriginalPreviewFallback(message) {
+function createOriginalPreviewFallback(message, options = {}) {
   const fallback = document.createElement("div");
   fallback.className = "preview-fallback";
-  fallback.textContent = message;
+  if (!options.loading) {
+    fallback.textContent = message;
+    return fallback;
+  }
+
+  fallback.classList.add("loading");
+  fallback.setAttribute("role", "status");
+  fallback.setAttribute("aria-live", "polite");
+  const spinner = document.createElement("span");
+  spinner.className = "preview-loading-spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  const copy = document.createElement("div");
+  copy.className = "preview-loading-copy";
+  const title = document.createElement("strong");
+  title.className = "preview-loading-title";
+  title.textContent = message;
+  const detail = document.createElement("span");
+  detail.className = "preview-loading-detail";
+  detail.textContent = options.detail || "正在处理，请保持页面打开。";
+  const bar = document.createElement("span");
+  bar.className = "preview-loading-bar";
+  bar.setAttribute("aria-hidden", "true");
+  copy.append(title, detail, bar);
+  fallback.append(spinner, copy);
   return fallback;
+}
+
+function updatePreviewLoadingFallback(fallback, message, detail = "") {
+  if (!fallback) return;
+  const title = fallback.querySelector(".preview-loading-title");
+  const detailNode = fallback.querySelector(".preview-loading-detail");
+  if (title && message) title.textContent = message;
+  if (detailNode && detail) detailNode.textContent = detail;
 }
 
 function renderOriginalDocumentPreviewLegacy() {
@@ -5959,29 +5990,42 @@ function renderPdfLayoutPreview() {
 
   const pages = document.createElement("div");
   pages.className = "pdf-layout-pages";
-  pages.replaceChildren(createOriginalPreviewFallback("正在生成真实 PDF 预览，请稍等..."));
+  const loadingFallback = createOriginalPreviewFallback("正在生成真实 PDF 预览", {
+    loading: true,
+    detail: "会先生成一份和导出完全一致的 PDF，再渲染到预览区；大文件可能需要几十秒。",
+  });
+  pages.replaceChildren(loadingFallback);
   els.previewBody.append(pages);
 
-  renderPdfLayoutPreviewPages(pages).catch((error) => {
+  renderPdfLayoutPreviewPages(pages, (message, detail) => {
+    updatePreviewLoadingFallback(loadingFallback, message, detail);
+  }).catch((error) => {
     console.warn("PDF layout preview failed", error);
     pages.replaceChildren(createOriginalPreviewFallback("PDF 排版预览生成失败。"));
   });
 }
 
-async function renderPdfLayoutPreviewPages(container) {
+async function renderPdfLayoutPreviewPages(container, onProgress = null) {
   if (!state.pdfBytes) throw new Error("Missing PDF bytes.");
+  onProgress?.("正在加载真实预览组件", "正在准备 PDF 渲染库和中文字体，首次打开会稍慢。");
   const pdfjs = await loadPdfJs();
   const { PDFDocument, fontkit, fontBytes } = await loadPdfExportTools();
   const previewDoc = await PDFDocument.create();
   previewDoc.registerFontkit(fontkit);
   const previewFont = await previewDoc.embedFont(fontBytes, { subset: false });
+  onProgress?.("正在生成真实 PDF 预览", "这一步会调用实际导出 PDF 的同一套逻辑，用来保证预览和导出一致。");
   const previewBlob = await downloadPdfOverlayTranslation();
+  onProgress?.("正在读取真实 PDF 页面", "已生成临时 PDF，正在交给浏览器渲染预览页面。");
   const previewBytes = await previewBlob.arrayBuffer();
   const pdf = await pdfjs.getDocument({ data: previewBytes.slice(0) }).promise;
   container.replaceChildren();
   await waitForUiFrame();
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    onProgress?.(
+      `正在渲染真实预览：第 ${pageNumber}/${pdf.numPages} 页`,
+      "页面会陆续显示出来；上层只保留可校准边框，避免文字重复堆叠。"
+    );
     const pdfPage = await pdf.getPage(pageNumber);
     const baseViewport = pdfPage.getViewport({ scale: 1 });
     const metrics = getOriginalPdfPreviewMetrics(container, baseViewport);
