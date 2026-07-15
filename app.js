@@ -116,7 +116,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v123";
+const APP_VERSION = "v124";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -1606,14 +1606,16 @@ async function drawPdfPreservedRegions(sourcePage, targetPage, pdfDoc, pagePath,
   const pageWidth = Number(pageSize.width || 595.28);
   const pageHeight = Number(pageSize.height || 841.89);
   for (const region of regions) {
-    const pngBytes = await renderPdfPageCropToPng(sourcePage, region, pageWidth, pageHeight, options);
+    const sourceBounds = getPdfRegionSourceBounds(region);
+    const targetBounds = getPdfRegionTargetBounds(region);
+    const pngBytes = await renderPdfPageCropToPng(sourcePage, sourceBounds, pageWidth, pageHeight, options);
     if (!pngBytes) continue;
     const image = await pdfDoc.embedPng(pngBytes);
     targetPage.drawImage(image, {
-      x: region.x,
-      y: region.y,
-      width: region.width,
-      height: region.height,
+      x: targetBounds.x,
+      y: targetBounds.y,
+      width: targetBounds.width,
+      height: targetBounds.height,
     });
   }
 }
@@ -1628,6 +1630,28 @@ function getPdfPreservedRegionsForPage(pagePath) {
     ...effectiveAutomaticRegions,
     ...manualRegions,
   ];
+}
+
+function getPdfRegionSourceBounds(region) {
+  return {
+    x: Number(region?.x || 0),
+    y: Number(region?.y || 0),
+    width: Number(region?.width || 0),
+    height: Number(region?.height || 0),
+  };
+}
+
+function getPdfRegionTargetBounds(region) {
+  const target = region?.targetBounds;
+  if (target && ["x", "y", "width", "height"].every((key) => Number.isFinite(Number(target[key])))) {
+    return {
+      x: Number(target.x),
+      y: Number(target.y),
+      width: Number(target.width),
+      height: Number(target.height),
+    };
+  }
+  return getPdfRegionSourceBounds(region);
 }
 
 async function renderPdfPageCropToPng(sourcePage, bounds, pageWidth, pageHeight, options = {}) {
@@ -4567,6 +4591,11 @@ function renderPreview() {
     return;
   }
 
+  if (state.fileType === "pdf" && !isSourceMode) {
+    renderPdfLayoutPreview();
+    return;
+  }
+
   const groups = groupSegmentsForPreview();
   groups.forEach((group) => {
     const section = document.createElement("section");
@@ -5773,6 +5802,239 @@ function createOriginalFileActions(url) {
   return actions;
 }
 
+function renderPdfLayoutPreview() {
+  if (els.previewTitle) {
+    els.previewTitle.textContent = "PDF 译文排版预览/调整";
+  }
+  if (els.previewMeta) {
+    els.previewMeta.textContent = `PDF · ${state.segments.length} 段文字 · ${getPdfManualPreservedRegionCount()} 个手动图片区域`;
+  }
+
+  const panel = document.createElement("section");
+  panel.className = "pdf-layout-tool";
+  const title = document.createElement("h3");
+  title.textContent = "局部调整";
+  const detail = document.createElement("p");
+  detail.textContent = "手动框选的图片/图题区域可在这里移动或缩放；导出时会从原位置裁剪图片，并按这里的位置放入译文 PDF。";
+  panel.append(title, detail);
+  els.previewBody.append(panel);
+
+  const pages = document.createElement("div");
+  pages.className = "pdf-layout-pages";
+  pages.append(createOriginalPreviewFallback("正在生成 PDF 译文排版预览..."));
+  els.previewBody.append(pages);
+
+  renderPdfLayoutPreviewPages(pages).catch((error) => {
+    console.warn("PDF layout preview failed", error);
+    pages.replaceChildren(createOriginalPreviewFallback("PDF 排版预览生成失败。"));
+  });
+}
+
+async function renderPdfLayoutPreviewPages(container) {
+  if (!state.pdfBytes) throw new Error("Missing PDF bytes.");
+  const pdfjs = await loadPdfJs();
+  const pdf = await pdfjs.getDocument({ data: state.pdfBytes.slice() }).promise;
+  container.replaceChildren();
+  await waitForUiFrame();
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const pdfPage = await pdf.getPage(pageNumber);
+    const baseViewport = pdfPage.getViewport({ scale: 1 });
+    const metrics = getOriginalPdfPreviewMetrics(container, baseViewport);
+    const viewport = pdfPage.getViewport({ scale: metrics.renderScale });
+    const pagePath = `pdf/page-${pageNumber}`;
+    const pageShell = document.createElement("section");
+    pageShell.className = "pdf-layout-page";
+    pageShell.style.width = `${metrics.cssWidth}px`;
+
+    const label = document.createElement("span");
+    label.textContent = `第 ${pageNumber} 页`;
+
+    const frame = document.createElement("div");
+    frame.className = "pdf-layout-page-frame";
+    frame.style.width = `${metrics.cssWidth}px`;
+    frame.style.height = `${metrics.cssHeight}px`;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    canvas.style.width = `${metrics.cssWidth}px`;
+    canvas.style.height = `${metrics.cssHeight}px`;
+    canvas.style.aspectRatio = `${baseViewport.width} / ${baseViewport.height}`;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("Canvas unavailable.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    const overlay = document.createElement("div");
+    overlay.className = "pdf-layout-overlay";
+    overlay.dataset.pagePath = pagePath;
+    overlay.dataset.pageWidth = String(baseViewport.width);
+    overlay.dataset.pageHeight = String(baseViewport.height);
+    overlay.dataset.cssWidth = String(metrics.cssWidth);
+    overlay.dataset.cssHeight = String(metrics.cssHeight);
+
+    frame.append(canvas, overlay);
+    pageShell.append(label, frame);
+    container.append(pageShell);
+    await pdfPage.render({ canvasContext: context, viewport }).promise;
+    renderPdfLayoutTextBoxes(overlay, pagePath);
+    renderPdfLayoutImageBoxes(overlay, pagePath);
+    await waitForUiFrame();
+  }
+
+  if (!container.children.length) {
+    container.append(createOriginalPreviewFallback("PDF 没有可渲染页面。"));
+  }
+}
+
+function renderPdfLayoutTextBoxes(overlay, pagePath) {
+  const pageWidth = Number(overlay.dataset.pageWidth || 1);
+  const pageHeight = Number(overlay.dataset.pageHeight || 1);
+  const cssWidth = Number(overlay.dataset.cssWidth || 1);
+  const cssHeight = Number(overlay.dataset.cssHeight || 1);
+
+  state.segments
+    .filter((segment) => segment.type === "pdf" && segment.path === pagePath && segment.layout?.bounds)
+    .forEach((segment) => {
+      const text = getPdfExportText(segment);
+      if (!text) return;
+      const bounds = segment.layout.bounds;
+      const box = document.createElement("div");
+      box.className = "pdf-layout-text-box";
+      positionPdfLayoutBox(box, bounds, pageWidth, pageHeight, cssWidth, cssHeight);
+      box.textContent = text;
+      overlay.append(box);
+    });
+}
+
+function renderPdfLayoutImageBoxes(overlay, pagePath) {
+  const regions = state.pdfManualPreservedRegions.get(pagePath) || [];
+  const pageWidth = Number(overlay.dataset.pageWidth || 1);
+  const pageHeight = Number(overlay.dataset.pageHeight || 1);
+  const cssWidth = Number(overlay.dataset.cssWidth || 1);
+  const cssHeight = Number(overlay.dataset.cssHeight || 1);
+
+  regions.forEach((region) => {
+    const box = document.createElement("div");
+    box.className = "pdf-layout-image-box";
+    box.dataset.pagePath = pagePath;
+    box.dataset.regionId = region.id;
+    positionPdfLayoutBox(box, getPdfRegionTargetBounds(region), pageWidth, pageHeight, cssWidth, cssHeight);
+
+    const label = document.createElement("span");
+    label.textContent = `图片 ${getPdfManualRegionDisplayNumber(pagePath, region.id)}`;
+
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.textContent = "重置";
+    reset.title = "恢复到原始框选位置";
+    reset.addEventListener("click", (event) => {
+      event.stopPropagation();
+      delete region.targetBounds;
+      rerenderPreviewIfOpen();
+      scheduleCurrentDraftSave();
+    });
+
+    const handle = document.createElement("i");
+    handle.className = "pdf-layout-resize-handle";
+    handle.setAttribute("aria-hidden", "true");
+    attachPdfLayoutImageMove(box, region, overlay);
+    attachPdfLayoutImageResize(handle, box, region, overlay);
+    box.append(label, reset, handle);
+    overlay.append(box);
+  });
+}
+
+function positionPdfLayoutBox(box, bounds, pageWidth, pageHeight, cssWidth, cssHeight) {
+  box.style.left = `${(Number(bounds.x || 0) / pageWidth) * cssWidth}px`;
+  box.style.top = `${((pageHeight - Number(bounds.y || 0) - Number(bounds.height || 0)) / pageHeight) * cssHeight}px`;
+  box.style.width = `${(Number(bounds.width || 0) / pageWidth) * cssWidth}px`;
+  box.style.height = `${(Number(bounds.height || 0) / pageHeight) * cssHeight}px`;
+}
+
+function updatePdfManualRegionTargetFromBox(region, box, overlay) {
+  const pageWidth = Number(overlay.dataset.pageWidth || 1);
+  const pageHeight = Number(overlay.dataset.pageHeight || 1);
+  const cssWidth = Number(overlay.dataset.cssWidth || overlay.getBoundingClientRect().width || 1);
+  const cssHeight = Number(overlay.dataset.cssHeight || overlay.getBoundingClientRect().height || 1);
+  const left = Math.max(0, box.offsetLeft);
+  const top = Math.max(0, box.offsetTop);
+  const width = Math.max(8, box.offsetWidth);
+  const height = Math.max(8, box.offsetHeight);
+  const x = clampNumber((left / cssWidth) * pageWidth, 0, pageWidth);
+  const targetWidth = clampNumber((width / cssWidth) * pageWidth, 1, pageWidth - x);
+  const topPdf = pageHeight - (top / cssHeight) * pageHeight;
+  const bottomPdf = pageHeight - ((top + height) / cssHeight) * pageHeight;
+  const y = clampNumber(bottomPdf, 0, pageHeight);
+  const targetHeight = clampNumber(topPdf - bottomPdf, 1, pageHeight - y);
+  region.targetBounds = { x, y, width: targetWidth, height: targetHeight };
+}
+
+function attachPdfLayoutImageMove(box, region, overlay) {
+  box.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("button") || event.target.closest(".pdf-layout-resize-handle")) return;
+    event.preventDefault();
+    box.setPointerCapture?.(event.pointerId);
+    const start = {
+      x: event.clientX,
+      y: event.clientY,
+      left: box.offsetLeft,
+      top: box.offsetTop,
+    };
+    const move = (moveEvent) => {
+      const maxLeft = overlay.clientWidth - box.offsetWidth;
+      const maxTop = overlay.clientHeight - box.offsetHeight;
+      box.style.left = `${clampNumber(start.left + moveEvent.clientX - start.x, 0, Math.max(0, maxLeft))}px`;
+      box.style.top = `${clampNumber(start.top + moveEvent.clientY - start.y, 0, Math.max(0, maxTop))}px`;
+    };
+    const done = () => {
+      box.removeEventListener("pointermove", move);
+      box.removeEventListener("pointerup", done);
+      box.removeEventListener("pointercancel", done);
+      updatePdfManualRegionTargetFromBox(region, box, overlay);
+      scheduleCurrentDraftSave();
+    };
+    box.addEventListener("pointermove", move);
+    box.addEventListener("pointerup", done);
+    box.addEventListener("pointercancel", done);
+  });
+}
+
+function attachPdfLayoutImageResize(handle, box, region, overlay) {
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    handle.setPointerCapture?.(event.pointerId);
+    const start = {
+      x: event.clientX,
+      y: event.clientY,
+      width: box.offsetWidth,
+      height: box.offsetHeight,
+    };
+    const ratio = Math.max(0.1, start.width / Math.max(1, start.height));
+    const move = (moveEvent) => {
+      const delta = Math.max(moveEvent.clientX - start.x, (moveEvent.clientY - start.y) * ratio);
+      const maxWidth = overlay.clientWidth - box.offsetLeft;
+      const maxHeight = overlay.clientHeight - box.offsetTop;
+      const width = clampNumber(start.width + delta, 24, Math.max(24, maxWidth));
+      const height = clampNumber(width / ratio, 18, Math.max(18, maxHeight));
+      box.style.width = `${width}px`;
+      box.style.height = `${height}px`;
+    };
+    const done = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", done);
+      handle.removeEventListener("pointercancel", done);
+      updatePdfManualRegionTargetFromBox(region, box, overlay);
+      scheduleCurrentDraftSave();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", done);
+    handle.addEventListener("pointercancel", done);
+  });
+}
+
 function getOriginalPreviewUrl() {
   if (!state.originalPreviewUrl && state.file) {
     state.originalPreviewUrl = URL.createObjectURL(state.file);
@@ -5903,7 +6165,10 @@ function isInsidePdfPreservedRegion(segment) {
   const bounds = segment.layout.bounds;
   const cx = Number(bounds.x || 0) + Number(bounds.width || 0) / 2;
   const cy = Number(bounds.y || 0) + Number(bounds.height || 0) / 2;
-  return regions.some((region) => pointInRect(cx, cy, region) || rectsIntersect(bounds, region));
+  return regions.some((region) => {
+    const targetBounds = getPdfRegionTargetBounds(region);
+    return pointInRect(cx, cy, targetBounds) || rectsIntersect(bounds, targetBounds);
+  });
 }
 
 function shouldRedrawKeptPdfSourceText(segment) {
@@ -6703,6 +6968,7 @@ function serializePdfManualPreservedRegions() {
       y: Number(region.y || 0),
       width: Number(region.width || 0),
       height: Number(region.height || 0),
+      targetBounds: sanitizePdfRegionTargetBounds(region.targetBounds),
     })).filter((region) => region.width > 0 && region.height > 0),
   })).filter((entry) => entry.pagePath && entry.regions.length);
 }
@@ -6720,10 +6986,21 @@ function restorePdfManualPreservedRegions(entries) {
         y: Number(region.y || 0),
         width: Number(region.width || 0),
         height: Number(region.height || 0),
+        targetBounds: sanitizePdfRegionTargetBounds(region.targetBounds),
       }))
       .filter((region) => Number.isFinite(region.x) && Number.isFinite(region.y) && region.width > 0 && region.height > 0);
     if (regions.length) state.pdfManualPreservedRegions.set(pagePath, regions);
   });
+}
+
+function sanitizePdfRegionTargetBounds(bounds) {
+  if (!bounds || !["x", "y", "width", "height"].every((key) => Number.isFinite(Number(bounds[key])))) return null;
+  return {
+    x: Number(bounds.x),
+    y: Number(bounds.y),
+    width: Number(bounds.width),
+    height: Number(bounds.height),
+  };
 }
 
 function sanitizeSegmentOverrides(overrides = {}) {
