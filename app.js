@@ -116,7 +116,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v122";
+const APP_VERSION = "v123";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -5350,7 +5350,7 @@ function createPdfRegionSelectionLayer({ pagePath, pageWidth, pageHeight, cssWid
     layer.releasePointerCapture?.(event.pointerId);
     if (rect.width < 8 || rect.height < 8) return;
     addPdfManualPreservedRegionFromCss(layer, rect);
-    renderPdfManualRegionBoxes(layer);
+    renderAllPdfManualRegionBoxes();
     updatePdfRegionSelectionControls();
     scheduleCurrentDraftSave();
   };
@@ -5429,7 +5429,7 @@ function renderPdfManualRegionBoxes(layer) {
   const cssWidth = Number(layer.dataset.cssWidth || layer.getBoundingClientRect().width || 1);
   const cssHeight = Number(layer.dataset.cssHeight || layer.getBoundingClientRect().height || 1);
 
-  regions.forEach((region, index) => {
+  regions.forEach((region) => {
     const box = document.createElement("div");
     box.className = "pdf-manual-region-box";
     box.style.left = `${(Number(region.x || 0) / pageWidth) * cssWidth}px`;
@@ -5437,7 +5437,7 @@ function renderPdfManualRegionBoxes(layer) {
     box.style.width = `${(Number(region.width || 0) / pageWidth) * cssWidth}px`;
     box.style.height = `${(Number(region.height || 0) / pageHeight) * cssHeight}px`;
     const label = document.createElement("span");
-    label.textContent = `保留 ${index + 1}`;
+    label.textContent = `保留 ${getPdfManualRegionDisplayNumber(pagePath, region.id)}`;
     const remove = document.createElement("button");
     remove.type = "button";
     remove.title = "删除此区域";
@@ -5447,13 +5447,34 @@ function renderPdfManualRegionBoxes(layer) {
       event.preventDefault();
       event.stopPropagation();
       removePdfManualPreservedRegion(pagePath, region.id);
-      renderPdfManualRegionBoxes(layer);
+      renderAllPdfManualRegionBoxes();
       updatePdfRegionSelectionControls();
       scheduleCurrentDraftSave();
     });
     box.append(label, remove);
     layer.append(box);
   });
+}
+
+function getPdfManualRegionDisplayNumber(pagePath, regionId) {
+  const ordered = getOrderedPdfManualRegions();
+  const index = ordered.findIndex((item) => item.pagePath === pagePath && item.region.id === regionId);
+  return index >= 0 ? index + 1 : ordered.length + 1;
+}
+
+function getOrderedPdfManualRegions() {
+  return [...state.pdfManualPreservedRegions.entries()]
+    .sort((a, b) => getPdfPageNumberFromPath(a[0]) - getPdfPageNumberFromPath(b[0]))
+    .flatMap(([pagePath, regions]) => (regions || []).map((region) => ({ pagePath, region })));
+}
+
+function getPdfPageNumberFromPath(pagePath) {
+  const match = String(pagePath || "").match(/page-(\d+)/);
+  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+}
+
+function renderAllPdfManualRegionBoxes() {
+  document.querySelectorAll(".pdf-region-layer").forEach((layer) => renderPdfManualRegionBoxes(layer));
 }
 
 function removePdfManualPreservedRegion(pagePath, regionId) {
