@@ -1144,6 +1144,19 @@ td:first-child {
   box-shadow: var(--shadow);
 }
 
+.preview-dialog.fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  border: 0;
+  border-radius: 0;
+}
+
+.preview-dialog.fullscreen .preview-shell {
+  height: 100vh;
+  max-height: 100vh;
+}
+
 .help-dialog {
   width: min(780px, calc(100vw - 28px));
 }
@@ -1582,6 +1595,12 @@ td:first-child {
   opacity: 0.16;
 }
 
+.pdf-layout-page-frame.rendered-output canvas,
+.pdf-layout-page-frame.rendered-output.source-visible canvas {
+  opacity: 1;
+  filter: none;
+}
+
 .pdf-layout-overlay {
   position: absolute;
   inset: 0;
@@ -1608,6 +1627,32 @@ td:first-child {
   color: #172321;
   pointer-events: auto;
   user-select: text;
+}
+
+.pdf-layout-page-frame.rendered-output .pdf-layout-text-box.exportable {
+  background: transparent;
+  border-color: rgba(22, 90, 114, 0.22);
+}
+
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-content {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-drag,
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-reset,
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-resize-handle {
+  opacity: 0;
+}
+
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable:hover .pdf-layout-text-drag,
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable:hover .pdf-layout-text-reset,
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable:hover .pdf-layout-text-resize-handle,
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable:focus-within .pdf-layout-text-content,
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable:focus-within .pdf-layout-text-drag,
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable:focus-within .pdf-layout-text-reset,
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable:focus-within .pdf-layout-text-resize-handle {
+  opacity: 1;
 }
 
 .pdf-layout-text-box.skipped {

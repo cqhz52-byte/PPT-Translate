@@ -14,6 +14,7 @@ const state = {
   pdfManualRegionSelectionEnabled: false,
   pdfLayoutShowSourceBackground: false,
   pdfLayoutShowParsedMap: false,
+  previewFullscreen: false,
   pdfBytes: null,
   pdfParseSource: "",
   pdfParsedMarkdown: "",
@@ -80,6 +81,7 @@ const els = {
   returnHomeButtons: [...document.querySelectorAll("[data-return-home]")],
   previewDialog: document.querySelector("#previewDialog"),
   previewCloseButton: document.querySelector("#previewCloseButton"),
+  previewFullscreenButton: document.querySelector("#previewFullscreenButton"),
   previewDownloadButton: document.querySelector("#previewDownloadButton"),
   previewShareButton: document.querySelector("#previewShareButton"),
   previewBody: document.querySelector("#previewBody"),
@@ -118,7 +120,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v131";
+const APP_VERSION = "v132";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -477,6 +479,7 @@ els.helpCloseButton?.addEventListener("click", closeHelp);
 els.appShareButton?.addEventListener("click", shareApp);
 els.adminButton?.addEventListener("click", openAdminManagement);
 els.previewCloseButton.addEventListener("click", closePreview);
+els.previewFullscreenButton?.addEventListener("click", togglePreviewFullscreen);
 els.previewDownloadButton.addEventListener("click", handlePreviewDownload);
 els.previewShareButton.addEventListener("click", handlePreviewShare);
 els.previewDialog.addEventListener("click", (event) => {
@@ -485,6 +488,7 @@ els.previewDialog.addEventListener("click", (event) => {
 els.helpDialog?.addEventListener("click", (event) => {
   if (event.target === els.helpDialog) closeHelp();
 });
+document.addEventListener("fullscreenchange", syncPreviewFullscreenState);
 
 [
   els.translationDirection,
@@ -4467,12 +4471,56 @@ function handlePreviewShare() {
 function closePreview() {
   state.pdfManualRegionSelectionEnabled = false;
   updatePdfRegionSelectionControls();
+  exitPreviewFullscreen();
   if (typeof els.previewDialog.close === "function" && els.previewDialog.open) {
     els.previewDialog.close();
   } else {
     els.previewDialog.removeAttribute("open");
   }
   revokeOriginalPreviewUrl();
+}
+
+async function togglePreviewFullscreen() {
+  if (!els.previewDialog) return;
+  if (state.previewFullscreen || document.fullscreenElement === els.previewDialog) {
+    await exitPreviewFullscreen();
+    return;
+  }
+  state.previewFullscreen = true;
+  syncPreviewFullscreenClass();
+  try {
+    if (els.previewDialog.requestFullscreen) {
+      await els.previewDialog.requestFullscreen();
+    }
+  } catch (error) {
+    console.warn("Preview fullscreen request failed; using CSS fullscreen.", error);
+  }
+  syncPreviewFullscreenClass();
+}
+
+async function exitPreviewFullscreen() {
+  state.previewFullscreen = false;
+  if (document.fullscreenElement === els.previewDialog && document.exitFullscreen) {
+    try {
+      await document.exitFullscreen();
+    } catch (error) {
+      console.warn("Preview fullscreen exit failed", error);
+    }
+  }
+  syncPreviewFullscreenClass();
+}
+
+function syncPreviewFullscreenState() {
+  state.previewFullscreen = document.fullscreenElement === els.previewDialog;
+  syncPreviewFullscreenClass();
+}
+
+function syncPreviewFullscreenClass() {
+  els.previewDialog?.classList.toggle("fullscreen", Boolean(state.previewFullscreen));
+  if (els.previewFullscreenButton) {
+    els.previewFullscreenButton.title = state.previewFullscreen ? "退出全屏" : "全屏预览";
+    els.previewFullscreenButton.setAttribute("aria-label", els.previewFullscreenButton.title);
+  }
 }
 
 function openHelp() {
@@ -5872,7 +5920,7 @@ function createOriginalFileActions(url) {
 
 function renderPdfLayoutPreview() {
   if (els.previewTitle) {
-    els.previewTitle.textContent = "PDF 译文排版预览/调整";
+    els.previewTitle.textContent = "PDF 真实排版预览/调整";
   }
   const stats = getPdfLayoutPreviewStats();
   if (els.previewMeta) {
@@ -5887,9 +5935,11 @@ function renderPdfLayoutPreview() {
   detail.textContent = "默认只显示系统会回写的译文层和手动图片框。原文底图仅用于对齐参考，不参与导出。";
   const actions = document.createElement("div");
   actions.className = "pdf-layout-tool-actions";
+  title.textContent = "真实排版校准";
+  detail.textContent = "页面底图由当前导出 PDF 实时渲染；上层只显示可校准边框，避免文字重复堆叠。";
   const sourceToggle = document.createElement("button");
   sourceToggle.type = "button";
-  sourceToggle.textContent = state.pdfLayoutShowSourceBackground ? "隐藏原文底图" : "显示原文底图";
+  sourceToggle.textContent = state.pdfLayoutShowSourceBackground ? "隐藏编辑文字" : "显示编辑文字";
   sourceToggle.classList.toggle("active", state.pdfLayoutShowSourceBackground);
   sourceToggle.addEventListener("click", () => {
     state.pdfLayoutShowSourceBackground = !state.pdfLayoutShowSourceBackground;
@@ -5909,7 +5959,7 @@ function renderPdfLayoutPreview() {
 
   const pages = document.createElement("div");
   pages.className = "pdf-layout-pages";
-  pages.append(createOriginalPreviewFallback("正在生成 PDF 译文排版预览..."));
+  pages.replaceChildren(createOriginalPreviewFallback("正在生成真实 PDF 预览，请稍等..."));
   els.previewBody.append(pages);
 
   renderPdfLayoutPreviewPages(pages).catch((error) => {
@@ -5925,7 +5975,9 @@ async function renderPdfLayoutPreviewPages(container) {
   const previewDoc = await PDFDocument.create();
   previewDoc.registerFontkit(fontkit);
   const previewFont = await previewDoc.embedFont(fontBytes, { subset: false });
-  const pdf = await pdfjs.getDocument({ data: state.pdfBytes.slice() }).promise;
+  const previewBlob = await downloadPdfOverlayTranslation();
+  const previewBytes = await previewBlob.arrayBuffer();
+  const pdf = await pdfjs.getDocument({ data: previewBytes.slice(0) }).promise;
   container.replaceChildren();
   await waitForUiFrame();
 
@@ -5944,6 +5996,7 @@ async function renderPdfLayoutPreviewPages(container) {
 
     const frame = document.createElement("div");
     frame.className = "pdf-layout-page-frame";
+    frame.classList.add("rendered-output");
     frame.classList.toggle("source-visible", state.pdfLayoutShowSourceBackground);
     frame.style.width = `${metrics.cssWidth}px`;
     frame.style.height = `${metrics.cssHeight}px`;

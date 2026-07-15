@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icons/icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=127">
+    <link rel="stylesheet" href="styles.css?v=132">
     <style>
       .startup-overlay {
         position: fixed;
@@ -101,7 +101,7 @@
           <img class="brand-logo" src="assets/curaway-logo.png" alt="CuraWay">
           <div>
             <h1>文档翻译工具</h1>
-            <p class="version">v131 · PDF 真实排版预览</p>
+            <p class="version">v132 · PDF 全屏真实预览</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -321,6 +321,9 @@
           <div class="preview-actions">
             <button id="previewDownloadButton" class="action-button hidden-action" type="button" disabled hidden>导出文件</button>
             <button id="previewShareButton" class="action-button share-action" type="button" disabled>分享文件</button>
+            <button class="icon-button" id="previewFullscreenButton" type="button" title="全屏预览" aria-label="全屏预览">
+              <span aria-hidden="true">⛶</span>
+            </button>
             <button class="icon-button" id="previewCloseButton" type="button" title="关闭预览" aria-label="关闭预览">
               <span aria-hidden="true">×</span>
             </button>
@@ -398,6 +401,6 @@
       </div>
     </dialog>
 
-    <script src="app.js?v=127" type="module"></script>
+    <script src="app.js?v=132" type="module"></script>
   </body>
 </html>
