@@ -1236,6 +1236,9 @@ td:first-child {
 }
 
 .pdf-region-tool {
+  position: sticky;
+  top: 0;
+  z-index: 25;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
@@ -1245,7 +1248,9 @@ td:first-child {
   padding: 12px;
   border: 1px solid rgba(22, 90, 114, 0.24);
   border-radius: 8px;
-  background: #eef8fa;
+  background: rgba(238, 248, 250, 0.98);
+  box-shadow: 0 12px 32px rgba(26, 52, 64, 0.16);
+  backdrop-filter: blur(10px);
 }
 
 .pdf-region-tool-copy {
