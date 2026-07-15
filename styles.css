@@ -1707,15 +1707,32 @@ td:first-child {
   border-color: rgba(22, 90, 114, 0.22);
 }
 
+.pdf-layout-page-frame.rendered-output .pdf-layout-text-box.exportable.local-updated {
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(191, 86, 37, 0.82);
+  box-shadow: 0 0 0 2px rgba(191, 86, 37, 0.12);
+}
+
 .pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-content {
   opacity: 0;
   pointer-events: none;
+}
+
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable.local-updated .pdf-layout-text-content {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-drag,
 .pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-reset,
 .pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-resize-handle {
   opacity: 0;
+}
+
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable.local-updated .pdf-layout-text-drag,
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable.local-updated .pdf-layout-text-reset,
+.pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable.local-updated .pdf-layout-text-resize-handle {
+  opacity: 1;
 }
 
 .pdf-layout-page-frame.rendered-output:not(.source-visible) .pdf-layout-text-box.exportable:hover .pdf-layout-text-drag,

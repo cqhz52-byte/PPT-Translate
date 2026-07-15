@@ -120,7 +120,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v133";
+const APP_VERSION = "v134";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -5984,7 +5984,14 @@ function renderPdfLayoutPreview() {
     state.pdfLayoutShowParsedMap = !state.pdfLayoutShowParsedMap;
     rerenderPreviewIfOpen();
   });
-  actions.append(sourceToggle, parsedToggle);
+  const refreshButton = document.createElement("button");
+  refreshButton.type = "button";
+  refreshButton.textContent = "刷新真实预览";
+  refreshButton.title = "重新生成真实 PDF 预览。移动或缩放单个框时不会自动刷新，避免长时间等待。";
+  refreshButton.addEventListener("click", () => {
+    rerenderPreviewIfOpen();
+  });
+  actions.append(sourceToggle, parsedToggle, refreshButton);
   panel.append(title, detail, actions);
   els.previewBody.append(panel);
 
@@ -6140,7 +6147,8 @@ function renderPdfLayoutTextBoxes(overlay, pagePath, font = null) {
           event.preventDefault();
           event.stopPropagation();
           delete segment.overrides.pdfBounds;
-          rerenderPreviewIfOpen();
+          positionPdfLayoutBoxFromBounds(box, segment.layout.bounds, overlay);
+          markPdfLayoutBoxLocalUpdate(box, "已恢复默认位置。导出/分享时会使用默认排版；如需重新生成画布，请点“刷新真实预览”。");
           scheduleCurrentDraftSave();
         });
         box.append(content, moveHandle, reset, handle);
@@ -6444,6 +6452,21 @@ function updatePdfSegmentBoundsFromBox(segment, box, overlay) {
   segment.overrides.pdfBounds = getPdfBoundsFromLayoutBox(box, overlay);
 }
 
+function positionPdfLayoutBoxFromBounds(box, bounds, overlay) {
+  const pageWidth = Number(overlay.dataset.pageWidth || 1);
+  const pageHeight = Number(overlay.dataset.pageHeight || 1);
+  const cssWidth = Number(overlay.dataset.cssWidth || overlay.getBoundingClientRect().width || 1);
+  const cssHeight = Number(overlay.dataset.cssHeight || overlay.getBoundingClientRect().height || 1);
+  positionPdfLayoutBox(box, bounds, pageWidth, pageHeight, cssWidth, cssHeight);
+}
+
+function markPdfLayoutBoxLocalUpdate(box, message = "已记录局部调整。导出/分享时会按新位置生成；如需重新生成画布，请点“刷新真实预览”。") {
+  box.classList.add("local-updated");
+  box.dataset.localUpdate = "true";
+  box.title = `${box.title || ""}\n${message}`.trim();
+  setStatus(message);
+}
+
 function attachPdfLayoutTextMove(handle, box, segment, overlay) {
   handle.addEventListener("pointerdown", (event) => {
     event.preventDefault();
@@ -6466,8 +6489,8 @@ function attachPdfLayoutTextMove(handle, box, segment, overlay) {
       handle.removeEventListener("pointerup", done);
       handle.removeEventListener("pointercancel", done);
       updatePdfSegmentBoundsFromBox(segment, box, overlay);
+      markPdfLayoutBoxLocalUpdate(box);
       scheduleCurrentDraftSave();
-      rerenderPreviewIfOpen();
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", done);
@@ -6499,8 +6522,8 @@ function attachPdfLayoutTextResize(handle, box, segment, overlay) {
       handle.removeEventListener("pointerup", done);
       handle.removeEventListener("pointercancel", done);
       updatePdfSegmentBoundsFromBox(segment, box, overlay);
+      markPdfLayoutBoxLocalUpdate(box);
       scheduleCurrentDraftSave();
-      rerenderPreviewIfOpen();
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", done);
