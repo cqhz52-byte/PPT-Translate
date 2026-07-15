@@ -118,7 +118,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v130";
+const APP_VERSION = "v131";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -776,7 +776,6 @@ async function loadPdfDocument(file, loadToken = state.loadToken) {
     const referenceContext = getPdfReferenceContext(lines, pageHeight, pdfReferenceSectionStarted);
     const preservedRegions = [
       ...detectPdfPreservedFigureRegions(page, blocks, pageWidth, pageHeight),
-      ...detectPdfPreservedReferenceRegions(blocks, referenceContext, pageWidth, pageHeight),
     ];
     state.pdfPreservedRegions.set(`pdf/page-${pageNumber}`, preservedRegions);
     pdfReferenceSectionStarted = pdfReferenceSectionStarted || referenceContext.startedOnPage;
@@ -1646,6 +1645,7 @@ function getPdfPreservedRegionsForPage(pagePath) {
   const manualRegions = getPdfManualImageRegions(pagePath);
   const automaticRegions = state.pdfPreservedRegions.get(pagePath) || [];
   const effectiveAutomaticRegions = automaticRegions.filter((region) => {
+    if (region.kind === "reference") return false;
     if (region.kind !== "figure") return true;
     return !manualRegions.some((manual) => rectsIntersect(getPdfRegionSourceBounds(manual), getPdfRegionSourceBounds(region)));
   });
@@ -5921,6 +5921,10 @@ function renderPdfLayoutPreview() {
 async function renderPdfLayoutPreviewPages(container) {
   if (!state.pdfBytes) throw new Error("Missing PDF bytes.");
   const pdfjs = await loadPdfJs();
+  const { PDFDocument, fontkit, fontBytes } = await loadPdfExportTools();
+  const previewDoc = await PDFDocument.create();
+  previewDoc.registerFontkit(fontkit);
+  const previewFont = await previewDoc.embedFont(fontBytes, { subset: false });
   const pdf = await pdfjs.getDocument({ data: state.pdfBytes.slice() }).promise;
   container.replaceChildren();
   await waitForUiFrame();
@@ -5967,7 +5971,7 @@ async function renderPdfLayoutPreviewPages(container) {
     pageShell.append(label, frame);
     container.append(pageShell);
     await pdfPage.render({ canvasContext: context, viewport }).promise;
-    renderPdfLayoutTextBoxes(overlay, pagePath);
+    renderPdfLayoutTextBoxes(overlay, pagePath, previewFont);
     renderPdfLayoutImageBoxes(overlay, pagePath);
     renderPdfLayoutFurnitureBoxes(overlay, pagePath);
     await waitForUiFrame();
@@ -5978,27 +5982,41 @@ async function renderPdfLayoutPreviewPages(container) {
   }
 }
 
-function renderPdfLayoutTextBoxes(overlay, pagePath) {
+function renderPdfLayoutTextBoxes(overlay, pagePath, font = null) {
   const pageWidth = Number(overlay.dataset.pageWidth || 1);
   const pageHeight = Number(overlay.dataset.pageHeight || 1);
   const cssWidth = Number(overlay.dataset.cssWidth || 1);
   const cssHeight = Number(overlay.dataset.cssHeight || 1);
+  const segments = state.segments
+    .filter((segment) => segment.type === "pdf" && segment.path === pagePath && segment.layout?.bounds);
+  const planEntries = [];
+  const plansBySegmentId = new Map();
 
-  state.segments
-    .filter((segment) => segment.type === "pdf" && segment.path === pagePath && segment.layout?.bounds)
-    .forEach((segment) => {
+  if (font) {
+    segments.forEach((segment) => {
+      const plan = createPdfOverlayPlan(segment, font);
+      if (!plan) return;
+      plansBySegmentId.set(segment.id, plan);
+      planEntries.push({ page: pagePath, plan });
+    });
+    resolvePdfOverlayPlanCollisions(planEntries);
+  }
+
+  segments.forEach((segment) => {
       const info = getPdfLayoutPreviewTextInfo(segment);
-      if (!info.text) return;
-      if (!info.exportable && !state.pdfLayoutShowParsedMap) return;
+      const plan = plansBySegmentId.get(segment.id);
+      if (!plan && !info.text) return;
+      if (!plan && !info.exportable && !state.pdfLayoutShowParsedMap) return;
       const bounds = segment.layout.bounds;
       const box = document.createElement("div");
-      box.className = `pdf-layout-text-box ${info.exportable ? "exportable" : "skipped"}`;
+      box.className = `pdf-layout-text-box ${plan ? "exportable" : "skipped"}`;
       box.title = info.reason;
-      positionPdfLayoutBox(box, info.exportable ? getPdfSegmentTargetBounds(segment) : bounds, pageWidth, pageHeight, cssWidth, cssHeight);
+      positionPdfLayoutBox(box, plan ? plan.fitBounds : bounds, pageWidth, pageHeight, cssWidth, cssHeight);
       const content = document.createElement("div");
       content.className = "pdf-layout-text-content";
-      content.textContent = info.text;
-      if (info.exportable) {
+      content.textContent = plan ? plan.lines.join("\n") : info.text;
+      if (plan) {
+        applyPdfLayoutTextPlanStyles(content, box, plan, pageWidth, pageHeight, cssWidth, cssHeight);
         content.contentEditable = "true";
         content.spellcheck = false;
         content.title = "可直接编辑译文";
@@ -6034,6 +6052,24 @@ function renderPdfLayoutTextBoxes(overlay, pagePath) {
       }
       overlay.append(box);
     });
+}
+
+function applyPdfLayoutTextPlanStyles(content, box, plan, pageWidth, pageHeight, cssWidth, cssHeight) {
+  const scale = cssWidth / Math.max(1, pageWidth);
+  const boxTop = ((pageHeight - Number(plan.fitBounds.y || 0) - Number(plan.fitBounds.height || 0)) / pageHeight) * cssHeight;
+  const textTopPdf = Number(plan.y || 0) + Math.max(1, Number(plan.fontSize || 0) * 0.28);
+  const textTop = ((pageHeight - textTopPdf) / pageHeight) * cssHeight;
+  const contentTop = clampNumber(textTop - boxTop, 0, Math.max(0, cssHeight));
+  content.style.position = "absolute";
+  content.style.left = "2px";
+  content.style.right = "2px";
+  content.style.top = `${contentTop}px`;
+  content.style.height = "auto";
+  content.style.fontSize = `${Math.max(1, Number(plan.fontSize || 8) * scale)}px`;
+  content.style.lineHeight = `${Math.max(1, Number(plan.lineHeight || 10) * scale)}px`;
+  content.style.fontWeight = "600";
+  content.style.textAlign = plan.cellAlign === "center" ? "center" : "left";
+  content.style.whiteSpace = "pre-wrap";
 }
 
 function getPdfLayoutPreviewTextInfo(segment) {
@@ -6334,6 +6370,7 @@ function attachPdfLayoutTextMove(handle, box, segment, overlay) {
       handle.removeEventListener("pointercancel", done);
       updatePdfSegmentBoundsFromBox(segment, box, overlay);
       scheduleCurrentDraftSave();
+      rerenderPreviewIfOpen();
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", done);
@@ -6366,6 +6403,7 @@ function attachPdfLayoutTextResize(handle, box, segment, overlay) {
       handle.removeEventListener("pointercancel", done);
       updatePdfSegmentBoundsFromBox(segment, box, overlay);
       scheduleCurrentDraftSave();
+      rerenderPreviewIfOpen();
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", done);
@@ -6705,13 +6743,11 @@ function shouldRedrawKeptPdfSourceText(segment) {
   if (!segment || isLikelyPdfHeaderFooterText(segment) || isLikelyPdfPublicationFurniture(segment) || isLikelyPdfArtifactText(segment)) {
     return false;
   }
-  if (segment?.layout?.isReferenceText) return false;
   return false;
 }
 
 function shouldKeepPdfSourceText(segment) {
-  return Boolean(segment?.layout?.isReferenceText) ||
-    isLikelyPdfArtifactText(segment) ||
+  return isLikelyPdfArtifactText(segment) ||
     isLikelyPdfHeaderFooterText(segment) ||
     isLikelyPdfPublicationFurniture(segment);
 }
