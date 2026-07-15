@@ -13,7 +13,7 @@ const state = {
   pdfManualPreservedRegions: new Map(),
   pdfManualRegionSelectionEnabled: false,
   pdfLayoutShowSourceBackground: false,
-  pdfLayoutShowParsedMap: false,
+  pdfLayoutShowParsedMap: true,
   pdfBytes: null,
   pdfParseSource: "",
   pdfParsedMarkdown: "",
@@ -118,7 +118,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v125";
+const APP_VERSION = "v126";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -5810,7 +5810,7 @@ function renderPdfLayoutPreview() {
   }
   const stats = getPdfLayoutPreviewStats();
   if (els.previewMeta) {
-    els.previewMeta.textContent = `PDF · 已解析 ${stats.parsed} 段 · 将回写 ${stats.exportable} 段 · 跳过 ${stats.skipped} 段 · ${getPdfManualPreservedRegionCount()} 个手动图片区域`;
+    els.previewMeta.textContent = `PDF · 已解析 ${stats.parsed} 段 · 可定位 ${stats.positioned} 段 · 将回写 ${stats.exportable} 段 · 跳过 ${stats.skipped} 段 · 无坐标 ${stats.unpositioned} 段 · ${getPdfManualPreservedRegionCount()} 个手动图片区域`;
   }
 
   const panel = document.createElement("section");
@@ -5958,12 +5958,15 @@ function getPdfLayoutPreviewTextInfo(segment) {
 }
 
 function getPdfLayoutPreviewStats() {
-  const pdfSegments = state.segments.filter((segment) => segment.type === "pdf" && segment.layout?.bounds);
-  const exportable = pdfSegments.filter((segment) => Boolean(getPdfExportText(segment))).length;
+  const pdfSegments = state.segments.filter((segment) => segment.type === "pdf");
+  const positionedSegments = pdfSegments.filter((segment) => segment.layout?.bounds);
+  const exportable = positionedSegments.filter((segment) => Boolean(getPdfExportText(segment))).length;
   return {
     parsed: pdfSegments.length,
+    positioned: positionedSegments.length,
     exportable,
-    skipped: Math.max(0, pdfSegments.length - exportable),
+    skipped: Math.max(0, positionedSegments.length - exportable),
+    unpositioned: Math.max(0, pdfSegments.length - positionedSegments.length),
   };
 }
 
