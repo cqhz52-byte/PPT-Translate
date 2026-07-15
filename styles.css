@@ -1629,10 +1629,13 @@ td:first-child {
   box-shadow: inset 0 0 0 1px rgba(22, 90, 114, 0.22);
 }
 
-.pdf-layout-text-move,
+.pdf-layout-text-drag,
 .pdf-layout-text-reset {
   position: absolute;
-  top: -26px;
+  top: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 22px;
   padding: 0 6px;
   border-radius: 5px;
@@ -1644,14 +1647,15 @@ td:first-child {
   pointer-events: auto;
 }
 
-.pdf-layout-text-move {
-  left: 0;
+.pdf-layout-text-drag {
+  left: 2px;
   cursor: move;
   touch-action: none;
+  user-select: none;
 }
 
 .pdf-layout-text-reset {
-  left: 42px;
+  right: 2px;
 }
 
 .pdf-layout-text-resize-handle {
@@ -1685,6 +1689,12 @@ td:first-child {
   user-select: none;
 }
 
+.pdf-layout-image-box.automatic {
+  border-style: dashed;
+  border-color: #0f6d7a;
+  background: rgba(22, 90, 114, 0.12);
+}
+
 .pdf-layout-image-box span,
 .pdf-layout-image-box button {
   border-radius: 4px;
@@ -1700,6 +1710,58 @@ td:first-child {
 }
 
 .pdf-layout-image-box button {
+  min-height: 22px;
+  padding: 0 6px;
+  border: 0;
+}
+
+.pdf-layout-image-box.automatic span,
+.pdf-layout-image-box.automatic button {
+  background: rgba(10, 72, 82, 0.84);
+}
+
+.pdf-layout-furniture-box {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 52px;
+  min-height: 18px;
+  padding: 3px;
+  border: 2px dashed rgba(32, 113, 89, 0.76);
+  background: rgba(32, 113, 89, 0.1);
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.pdf-layout-furniture-box.footer {
+  border-color: rgba(180, 83, 42, 0.8);
+  background: rgba(180, 83, 42, 0.11);
+}
+
+.pdf-layout-furniture-box span,
+.pdf-layout-furniture-box button {
+  border-radius: 4px;
+  background: rgba(22, 80, 62, 0.86);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.pdf-layout-furniture-box.footer span,
+.pdf-layout-furniture-box.footer button {
+  background: rgba(95, 42, 21, 0.86);
+}
+
+.pdf-layout-furniture-box span {
+  padding: 4px 5px;
+}
+
+.pdf-layout-furniture-box button {
   min-height: 22px;
   padding: 0 6px;
   border: 0;
