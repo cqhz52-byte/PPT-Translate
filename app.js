@@ -120,7 +120,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v136";
+const APP_VERSION = "v137";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -1226,7 +1226,7 @@ async function rebuildPdfPageNonTextElements(sourcePage, targetPage, pdfDoc, pdf
       if (fn === op.fillStroke || fn === op.eoFillStroke || fn === op.closeFillStroke) {
         drawPdfRebuiltPathFills(targetPage, currentPath, graphics, rgb);
       }
-      drawPdfRebuiltPathStrokes(targetPage, currentPath, graphics, rgb, options);
+      drawPdfRebuiltPathStrokes(targetPage, currentPath, graphics, rgb);
       currentPath = null;
       continue;
     }
@@ -1400,7 +1400,7 @@ function extractPdfDrawablePath(args, matrix, op, pageWidth, pageHeight) {
   };
 }
 
-function drawPdfRebuiltPathStrokes(page, path, graphics, rgb, options = {}) {
+function drawPdfRebuiltPathStrokes(page, path, graphics, rgb) {
   if (!path?.lines?.length) return;
   const color = graphics.strokeColor || { r: 0, g: 0, b: 0 };
   const thickness = Math.max(0.2, Math.min(6, Number(graphics.lineWidth || 1)));
@@ -1412,9 +1412,6 @@ function drawPdfRebuiltPathStrokes(page, path, graphics, rgb, options = {}) {
       color: rgb(color.r, color.g, color.b),
       opacity: 1,
     });
-    if (Array.isArray(options.rebuiltLines)) {
-      options.rebuiltLines.push({ ...line, thickness, color: { ...color } });
-    }
   });
 }
 
@@ -4915,15 +4912,13 @@ async function downloadPdfOverlayTranslation() {
   pdfDoc.registerFontkit(fontkit);
   pdfDoc.setTitle(`${state.file.name} translated`);
   const pages = [];
-  const pageVectorLines = [];
 
   for (let pageNumber = 1; pageNumber <= sourcePdf.numPages; pageNumber += 1) {
     const sourcePage = await sourcePdf.getPage(pageNumber);
     const pageSize = state.pdfPageSizes.get(`pdf/page-${pageNumber}`) || sourcePage.getViewport({ scale: 1 });
     const page = pdfDoc.addPage([pageSize.width || 595.28, pageSize.height || 841.89]);
     const startRatio = sourcePdf.numPages ? (pageNumber - 1) / sourcePdf.numPages : 0;
-    const rebuiltLines = [];
-    const pageRenderOptions = { renderCache: new Map(), rebuiltLines };
+    const pageRenderOptions = { renderCache: new Map() };
     setProgress(0.18 + startRatio * 0.22);
     setStatus(`正在重建 PDF 非文字元素：第 ${pageNumber}/${sourcePdf.numPages} 页（复杂图片会自动跳过，避免卡住）`);
     await waitForUiFrame();
@@ -4941,7 +4936,6 @@ async function downloadPdfOverlayTranslation() {
       await waitForUiFrame();
     }
     pages.push(page);
-    pageVectorLines[pageNumber - 1] = rebuiltLines;
 
     const ratio = sourcePdf.numPages ? pageNumber / sourcePdf.numPages : 1;
     setProgress(0.18 + ratio * 0.22);
@@ -4980,12 +4974,6 @@ async function downloadPdfOverlayTranslation() {
   resolvePdfOverlayPlanCollisions(overlayPlans);
   overlayPlans.forEach(({ page, plan }) => drawPdfOverlayErase(page, plan, rgb));
   overlayPlans.forEach(({ page, plan }) => drawPdfOverlayText(page, plan, font, rgb));
-  pages.forEach((page, index) => {
-    const pagePlans = overlayPlans
-      .filter((entry) => entry.page === page)
-      .map((entry) => entry.plan);
-    redrawPdfLinesCoveredByOverlay(page, pageVectorLines[index] || [], pagePlans, rgb);
-  });
 
   setProgress(0.9);
   setStatus("正在保存翻译版 PDF，文件较大时可能需要几十秒...");
@@ -6773,60 +6761,6 @@ function drawPdfOverlayErase(page, plan, rgb) {
     color: rgb(plan.erase.color.r, plan.erase.color.g, plan.erase.color.b),
     opacity: 1,
   });
-}
-
-function redrawPdfLinesCoveredByOverlay(page, lines, plans, rgb) {
-  if (!Array.isArray(lines) || !lines.length || !Array.isArray(plans) || !plans.length) return;
-  const eraseBounds = plans
-    .map((plan) => plan?.erase)
-    .filter(Boolean)
-    .map((erase) => ({
-      x: Number(erase.x || 0),
-      y: Number(erase.y || 0),
-      width: Number(erase.width || 0),
-      height: Number(erase.height || 0),
-    }));
-  if (!eraseBounds.length) return;
-
-  const drawn = new Set();
-  lines
-    .filter((line) => shouldRestorePdfLineAfterOverlay(line, eraseBounds))
-    .forEach((line) => {
-      const key = [
-        Math.round(Number(line.x1 || 0) * 2) / 2,
-        Math.round(Number(line.y1 || 0) * 2) / 2,
-        Math.round(Number(line.x2 || 0) * 2) / 2,
-        Math.round(Number(line.y2 || 0) * 2) / 2,
-      ].join(":");
-      if (drawn.has(key)) return;
-      drawn.add(key);
-      const color = line.color || { r: 0, g: 0, b: 0 };
-      page.drawLine({
-        start: { x: Number(line.x1 || 0), y: Number(line.y1 || 0) },
-        end: { x: Number(line.x2 || 0), y: Number(line.y2 || 0) },
-        thickness: Math.max(0.25, Math.min(4, Number(line.thickness || 1))),
-        color: rgb(color.r, color.g, color.b),
-        opacity: 1,
-      });
-    });
-}
-
-function shouldRestorePdfLineAfterOverlay(line, eraseBounds) {
-  if (!line) return false;
-  const horizontal = Math.abs(Number(line.y1 || 0) - Number(line.y2 || 0)) <= 1.5;
-  const vertical = Math.abs(Number(line.x1 || 0) - Number(line.x2 || 0)) <= 1.5;
-  if (!horizontal && !vertical) return false;
-  const length = Math.hypot(Number(line.x2 || 0) - Number(line.x1 || 0), Number(line.y2 || 0) - Number(line.y1 || 0));
-  if (length < 18) return false;
-  const thickness = Math.max(0.2, Number(line.thickness || 1));
-  const pad = Math.max(1.5, thickness * 2);
-  const bounds = {
-    x: Math.min(Number(line.x1 || 0), Number(line.x2 || 0)) - pad,
-    y: Math.min(Number(line.y1 || 0), Number(line.y2 || 0)) - pad,
-    width: Math.abs(Number(line.x2 || 0) - Number(line.x1 || 0)) + pad * 2 || pad * 2,
-    height: Math.abs(Number(line.y2 || 0) - Number(line.y1 || 0)) + pad * 2 || pad * 2,
-  };
-  return eraseBounds.some((erase) => rectsIntersect(bounds, erase));
 }
 
 function resolvePdfOverlayPlanCollisions(overlayPlans) {
