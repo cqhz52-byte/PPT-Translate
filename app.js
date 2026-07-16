@@ -120,7 +120,7 @@ const CURRENT_DRAFT_ID = "current";
 const SUMMARY_CACHE_DB = "curaway-summary-cache-v1";
 const SUMMARY_CACHE_STORE = "summaries";
 const DRAFT_SAVE_DELAY = 600;
-const APP_VERSION = "v134";
+const APP_VERSION = "v135";
 const VERSION_URL = "./version.json";
 const JSZIP_URL = "./vendor/jszip.min.js";
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -6121,6 +6121,7 @@ function renderPdfLayoutTextBoxes(overlay, pagePath, font = null) {
       content.textContent = plan ? plan.lines.join("\n") : info.text;
       if (plan) {
         applyPdfLayoutTextPlanStyles(content, box, plan, pageWidth, pageHeight, cssWidth, cssHeight);
+        setPdfLayoutTextContentHidden(content, !state.pdfLayoutShowSourceBackground);
         content.contentEditable = "true";
         content.spellcheck = false;
         content.title = "可直接编辑译文";
@@ -6148,7 +6149,9 @@ function renderPdfLayoutTextBoxes(overlay, pagePath, font = null) {
           event.stopPropagation();
           delete segment.overrides.pdfBounds;
           positionPdfLayoutBoxFromBounds(box, segment.layout.bounds, overlay);
-          markPdfLayoutBoxLocalUpdate(box, "已恢复默认位置。导出/分享时会使用默认排版；如需重新生成画布，请点“刷新真实预览”。");
+          clearPdfLayoutBoxLocalUpdate(box);
+          setPdfLayoutTextContentHidden(content, !state.pdfLayoutShowSourceBackground);
+          setStatus("已恢复默认位置。导出/分享时会使用默认排版；如需重新生成画布，请点“刷新真实预览”。");
           scheduleCurrentDraftSave();
         });
         box.append(content, moveHandle, reset, handle);
@@ -6463,8 +6466,20 @@ function positionPdfLayoutBoxFromBounds(box, bounds, overlay) {
 function markPdfLayoutBoxLocalUpdate(box, message = "已记录局部调整。导出/分享时会按新位置生成；如需重新生成画布，请点“刷新真实预览”。") {
   box.classList.add("local-updated");
   box.dataset.localUpdate = "true";
+  setPdfLayoutTextContentHidden(box.querySelector(".pdf-layout-text-content"), false);
   box.title = `${box.title || ""}\n${message}`.trim();
   setStatus(message);
+}
+
+function clearPdfLayoutBoxLocalUpdate(box) {
+  box.classList.remove("local-updated");
+  delete box.dataset.localUpdate;
+}
+
+function setPdfLayoutTextContentHidden(content, hidden) {
+  if (!content) return;
+  content.classList.toggle("preview-text-hidden", Boolean(hidden));
+  content.setAttribute("aria-hidden", hidden ? "true" : "false");
 }
 
 function attachPdfLayoutTextMove(handle, box, segment, overlay) {
